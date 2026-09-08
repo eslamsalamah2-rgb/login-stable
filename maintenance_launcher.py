@@ -58,6 +58,40 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
         return True
 
+
+
+    def _restart_all_accounts_after_password_error(self, account_number, reason):
+        """Close every Conquer page and restart from account 1 after a repeated password message.
+
+        The first Wrong password message can be caused by an empty/not-written
+        password field after a focus interruption.  If it appears again after
+        rewriting the password, we treat the whole current game-page group as
+        unsafe and restart cleanly from the first selected account.
+        """
+        self.set_status(
+            f"الحساب {account_number}: رسالة Wrong password ظهرت مرة ثانية بعد إعادة كتابة الباسورد - "
+            "إغلاق كل الصفحات والبدء من الأول..."
+        )
+
+        closed_count = ConquerMemoryReader.terminate_all_conquer()
+        print(
+            f"Repeated password message after rewrite - account {account_number} - "
+            f"reason={reason} - closed {closed_count} conquer.exe process(es); restarting all accounts"
+        )
+
+        self.active_sessions.clear()
+        self.current_account_index = 0
+
+        try:
+            with self.recovering_accounts_lock:
+                self.recovering_accounts.clear()
+        except Exception:
+            pass
+
+        self.reset_all_row_states()
+        time.sleep(1.0)
+        return "RESTART_ALL_ACCOUNTS", None
+
     def _current_launcher_pid(self):
         try:
             if self.launcher.process is None:
@@ -80,7 +114,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
         """Open launcher, click Start Game, and confirm a new conquer.exe PID.
 
         Sometimes the launcher button is visibly clicked but no Conquer page is
-        created. In that case we reopen the launcher and retry instead of
+        created.  In that case we reopen the launcher and retry instead of
         leaving the account stuck after "Start Game clicked".
         """
         max_attempts = 3
@@ -216,6 +250,13 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
                 continue
 
+            if result == "RESTART_ALL_ACCOUNTS":
+                self.set_status(
+                    "تم إغلاق كل صفحات Conquer بسبب تكرار Wrong password بعد إعادة كتابة الباسورد - "
+                    "جاري البدء من الحساب الأول..."
+                )
+                continue
+
             if result == "PAGE_TIMEOUT_RETRY":
                 self.set_row_state(index, "working")
                 self.set_status(
@@ -295,7 +336,13 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
         if not login_done:
             memory_reader.close()
-            return "LOGIN_FIELDS_ERROR", None
+            print(
+                f"Login fields/input failed for PID {conquer_pid} - closing this page "
+                "and retrying the same account from the launcher"
+            )
+            ConquerMemoryReader.terminate_conquer_pid(conquer_pid)
+            time.sleep(1.0)
+            return "PAGE_TIMEOUT_RETRY", None
 
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري الضغط على Log In..."
@@ -339,13 +386,20 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
         if message_type == PostLoginMessageTask.WRONG_PASSWORD:
             self.set_status(
-                f"الحساب {account_number}/{total_accounts}: مراجعة الباسورد..."
+                f"الحساب {account_number}/{total_accounts}: Wrong password - غالبًا الباسورد لم يُكتب؛ إعادة كتابته من الأول..."
+            )
+            print(
+                f"Wrong password message detected after first Log In - account {account_number} - "
+                f"PID {conquer_pid}; pressing OK and rewriting password"
             )
 
             self.post_login_task.press_ok()
             time.sleep(0.5)
 
-            if not self.login_task.rewrite_password(password):
+            if not self.login_task.rewrite_password(
+                password,
+                target_pid=conquer_pid,
+            ):
                 memory_reader.close()
                 return "PASSWORD_RETRY_ERROR", None
 
@@ -364,9 +418,16 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 return self._client_update_result(memory_reader)
 
             if second_message == PostLoginMessageTask.WRONG_PASSWORD:
+                print(
+                    f"Wrong password message repeated after password rewrite - account {account_number} - "
+                    f"PID {conquer_pid}; restarting all pages from the beginning"
+                )
                 self.post_login_task.press_ok()
                 memory_reader.close()
-                return "PAGE_ERROR", None
+                return self._restart_all_accounts_after_password_error(
+                    account_number,
+                    "NORMAL_LOGIN_WRONG_PASSWORD_AFTER_REWRITE",
+                )
 
             if second_message == PostLoginMessageTask.DISCONNECTED:
                 self.post_login_task.press_ok()
@@ -385,6 +446,18 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
                 if third_message == PostLoginMessageTask.CLIENT_UPDATE:
                     return self._client_update_result(memory_reader)
+
+                if third_message == PostLoginMessageTask.WRONG_PASSWORD:
+                    print(
+                        f"Wrong password message repeated after disconnected retry - account {account_number} - "
+                        f"PID {conquer_pid}; restarting all pages from the beginning"
+                    )
+                    self.post_login_task.press_ok()
+                    memory_reader.close()
+                    return self._restart_all_accounts_after_password_error(
+                        account_number,
+                        "NORMAL_LOGIN_DISCONNECTED_WRONG_PASSWORD_AFTER_REWRITE",
+                    )
 
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري قراءة اسم الشخصية من Memory..."
