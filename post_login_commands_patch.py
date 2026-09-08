@@ -31,14 +31,16 @@ COMMAND_SETTING_DEFAULTS = {
     "post_login_recovery_max_seconds": 120.0,
     "post_login_account_delay_seconds": 1.0,
     "post_login_round_delay_seconds": 2.0,
+    "post_login_test_hold_seconds": 0.70,
 }
 
 COMMAND_SETTING_LABELS = {
     "enable_post_login_commands": "تفعيل أوامر الدخول بعد اكتمال Login",
-    "post_login_debug_only": "أوامر الدخول Test Mode بدون ضغط/رمي",
+    "post_login_debug_only": "أوامر الدخول Test Mode - عرض الصفحات مرة واحدة بدون تنفيذ",
     "post_login_recovery_max_seconds": "أقصى وقت انتظار إصلاح الحساب قبل إغلاقه/ثانية",
     "post_login_account_delay_seconds": "فاصل بين كل حساب في أوامر الدخول/ثانية",
     "post_login_round_delay_seconds": "فاصل بين دورات أوامر الدخول/ثانية",
+    "post_login_test_hold_seconds": "مدة ظهور كل صفحة في اختبار أوامر الدخول/ثانية",
 }
 
 
