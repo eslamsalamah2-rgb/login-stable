@@ -3,6 +3,7 @@ import startup_focus_patch  # pauses monitor during input and retries focus fail
 import password_error_policy_patch  # restarts all pages after repeated wrong-password message
 import existing_pages_settings_patch  # adds Scan Open, side panel, and editable Settings
 import pre_merge_safety_patch  # logging, backups, input lock, feature flags, rollback prep
+import post_login_commands_patch  # starts safe post-login command loop after READY accounts
 from selection_launcher import SelectionAwareLauncher
 
 
