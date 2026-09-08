@@ -8,9 +8,10 @@ from tasks.memory_reader import ConquerMemoryReader
 class PostLoginCommandRunner:
     """Runs post-login commands after selected accounts become READY.
 
-    Stage 1 is an orchestration/safety layer only. It does not drop/use items yet.
-    The goal is to prove the control flow:
-      login first -> commands second -> health/recovery always has priority.
+    Stage 1 is an orchestration/safety layer only.
+    In Test Mode it foregrounds each selected READY page once so we can verify
+    ordering, then stops. Real command modules will foreground only the account
+    they are about to execute on.
     """
 
     def __init__(self, launcher):
@@ -61,6 +62,21 @@ class PostLoginCommandRunner:
 
         return max(float(minimum), value)
 
+    def _debug_only(self):
+        return self._feature_enabled("post_login_debug_only", True)
+
+    def _has_enabled_work_module(self):
+        """True only when a real post-login command module is enabled."""
+        return any(
+            self._feature_enabled(key, False)
+            for key in (
+                "enable_auto_drop",
+                "enable_sash_commands",
+                "enable_monster_scan",
+                "enable_movement",
+            )
+        )
+
     def _recovery_max_seconds(self):
         return self._setting_float(
             "post_login_recovery_max_seconds",
@@ -82,6 +98,13 @@ class PostLoginCommandRunner:
             minimum=0.0,
         )
 
+    def _test_hold_seconds(self):
+        return self._setting_float(
+            "post_login_test_hold_seconds",
+            0.70,
+            minimum=0.05,
+        )
+
     # ------------------------------------------------------------------
     # Public control
     # ------------------------------------------------------------------
@@ -94,12 +117,18 @@ class PostLoginCommandRunner:
             print(f"Post-login commands skipped by setting - reason={reason}")
             return False
 
-        ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
+        if not self._debug_only() and not self._has_enabled_work_module():
+            print(
+                "Post-login commands skipped - no real command module is enabled "
+                f"and Test Mode is OFF - reason={reason}"
+            )
+            self._set_status("أوامر الدخول: لا توجد مهمة فعلية مفعلة")
+            return False
 
+        ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
         if not ok:
             self._log_waiting(problem_index, problem_reason, reason)
-            if problem_reason == "NO_SELECTED_ACCOUNTS":
-                return False
+            return False
 
         with self.lock:
             if self.is_running():
@@ -113,22 +142,14 @@ class PostLoginCommandRunner:
             )
             self.thread.start()
 
-        if ok:
-            print(
-                "Post-login commands started - "
-                f"reason={reason} - accounts={[i + 1 for i in ready_indices]}"
-            )
-            self._set_status(
-                f"أوامر الدخول بدأت - {len(ready_indices)} حساب جاهز"
-            )
-        else:
-            print(
-                "Post-login commands watcher started - "
-                f"reason={reason} - waiting account="
-                f"{'' if problem_index is None else problem_index + 1} - {problem_reason}"
-            )
-            self._set_status("أوامر الدخول جاهزة وتنتظر اكتمال READY")
-
+        mode = "FOREGROUND_TEST_ONCE" if self._debug_only() else "COMMAND_LOOP"
+        print(
+            "Post-login commands started - "
+            f"reason={reason} - mode={mode} - accounts={[i + 1 for i in ready_indices]}"
+        )
+        self._set_status(
+            f"أوامر الدخول بدأت - {len(ready_indices)} حساب جاهز"
+        )
         return True
 
     def request_stop(self, reason="manual"):
@@ -187,9 +208,6 @@ class PostLoginCommandRunner:
     def _is_ready_for_commands(self, index):
         if self.launcher.is_running:
             return False, "LOGIN_SEQUENCE_RUNNING"
-
-        if getattr(self.launcher, "pause_requested", False):
-            return False, "PAUSED"
 
         if self._account_is_recovering(index):
             return False, "RECOVERING"
@@ -273,9 +291,6 @@ class PostLoginCommandRunner:
         if problem_index is None:
             self.problem_key = None
             self.problem_started_at = None
-            return
-
-        if problem_reason == "PAUSED":
             return
 
         key = (problem_index, str(problem_reason))
@@ -369,6 +384,12 @@ class PostLoginCommandRunner:
             self.problem_started_at = None
             completed_round = True
 
+            if self._debug_only():
+                print(
+                    "Post-login foreground test round started - "
+                    "each selected READY page will be brought to front once only"
+                )
+
             for index in ready_indices:
                 if self.stop_event.is_set():
                     completed_round = False
@@ -396,6 +417,18 @@ class PostLoginCommandRunner:
 
             if completed_round:
                 self.cycle_count += 1
+
+                if self._debug_only():
+                    print(
+                        "Post-login foreground test round finished - "
+                        f"round={self.cycle_count} - stopping test loop"
+                    )
+                    self._set_status(
+                        f"اختبار أوامر الدخول انتهى - تم عرض {len(ready_indices)} صفحة مرة واحدة"
+                    )
+                    self.stop_event.set()
+                    break
+
                 print(f"Post-login commands round finished - round={self.cycle_count}")
                 self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
                 self._sleep_interruptible(self._round_delay_seconds())
@@ -449,15 +482,28 @@ class PostLoginCommandRunner:
                 if not ok:
                     return reason
 
-                # Stage 1 intentionally does not click or type.
-                # Next stages will put Drop/Use/Sash here, after this foreground step.
+                if self._debug_only():
+                    print(
+                        "Post-login command step - "
+                        f"account={index + 1} - pid={pid} - name={page_name!r} - "
+                        "stage=FOREGROUND_TEST_ONLY"
+                    )
+                    self._set_status(
+                        f"اختبار أوامر الدخول: الحساب {index + 1} على الوش فقط"
+                    )
+                    time.sleep(self._test_hold_seconds())
+                    return "OK"
+
+                # Real command modules will be called here one by one.
+                # The foreground activation above must stay immediately before
+                # the actual command execution, not as a separate endless scan.
                 print(
                     "Post-login command step - "
                     f"account={index + 1} - pid={pid} - name={page_name!r} - "
-                    "stage=FOREGROUND_READY_CHECK_ONLY"
+                    "stage=READY_FOR_REAL_COMMANDS"
                 )
                 self._set_status(
-                    f"أوامر الدخول: الحساب {index + 1} على الوش - مرحلة اختبار فقط"
+                    f"أوامر الدخول: الحساب {index + 1} على الوش وجاهز للتنفيذ"
                 )
                 time.sleep(0.05)
             return "OK"
