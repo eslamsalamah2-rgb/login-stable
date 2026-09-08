@@ -1,3 +1,4 @@
+import health_recovery_patch  # applies recovery safety patch on import
 from selection_launcher import SelectionAwareLauncher
 
 
