@@ -1,4 +1,6 @@
 credentials.json
 accounts.json
+logs/
+backups/
 __pycache__/
 *.pyc
