@@ -88,8 +88,10 @@ class ConquerMemoryReader:
 
         Primary detection remains the safe rule used by the stable build: a
         conquer.exe PID that did not exist before this launch. We also inspect
-        the launcher child-process tree when a launcher PID is available.
-        Progress is logged so the program never appears silently frozen here.
+        the launcher child-process tree as a second source so a newly spawned
+        Conquer process is not missed during the short hand-off from play.exe.
+
+        The function logs its wait state instead of appearing frozen.
         """
         start_time = time.time()
         previous_pids = set(previous_pids or ())
@@ -104,6 +106,9 @@ class ConquerMemoryReader:
             current_pids = cls.list_conquer_pids()
             new_pids = current_pids - previous_pids
 
+            # Normal/primary path: a brand-new conquer.exe process. Choose the
+            # newest process by creation time rather than the numerically largest
+            # PID, because PID numbers are not a reliable creation-order signal.
             if new_pids:
                 def _created_at(pid):
                     try:
@@ -116,6 +121,9 @@ class ConquerMemoryReader:
                 print(f"Target Conquer PID locked: {pid} (new process)")
                 return pid
 
+            # Secondary path: inspect descendants of the exact play.exe process
+            # opened for this account. This helps during launcher hand-off while
+            # still requiring the child executable itself to be conquer.exe.
             if launcher_pid:
                 try:
                     launcher_process = psutil.Process(int(launcher_pid))
