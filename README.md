@@ -9,3 +9,8 @@ Current health logic:
 - Any timer-gated state must pass the in-window timer heartbeat before it can be treated as healthy.
 - If timer data is missing/static/unknown while memory still equals the learned healthy state, that state is also learned as timer-gated.
 - Local credentials/account files remain excluded by .gitignore.
+
+Latest additions:
+- Scan Open links already-open Conquer pages to saved account rows by the character name read from memory.
+- Open pages whose memory name is not saved in the account list are shown in the side panel and are not controlled automatically.
+- Settings window lets you adjust image thresholds, timer anchor threshold, Start Game/PID timeouts, and launcher retry attempts.
