@@ -95,9 +95,11 @@ class PostLoginCommandRunner:
             return False
 
         ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
+
         if not ok:
             self._log_waiting(problem_index, problem_reason, reason)
-            return False
+            if problem_reason == "NO_SELECTED_ACCOUNTS":
+                return False
 
         with self.lock:
             if self.is_running():
@@ -111,13 +113,22 @@ class PostLoginCommandRunner:
             )
             self.thread.start()
 
-        print(
-            "Post-login commands started - "
-            f"reason={reason} - accounts={[i + 1 for i in ready_indices]}"
-        )
-        self._set_status(
-            f"أوامر الدخول بدأت - {len(ready_indices)} حساب جاهز"
-        )
+        if ok:
+            print(
+                "Post-login commands started - "
+                f"reason={reason} - accounts={[i + 1 for i in ready_indices]}"
+            )
+            self._set_status(
+                f"أوامر الدخول بدأت - {len(ready_indices)} حساب جاهز"
+            )
+        else:
+            print(
+                "Post-login commands watcher started - "
+                f"reason={reason} - waiting account="
+                f"{'' if problem_index is None else problem_index + 1} - {problem_reason}"
+            )
+            self._set_status("أوامر الدخول جاهزة وتنتظر اكتمال READY")
+
         return True
 
     def request_stop(self, reason="manual"):
@@ -176,6 +187,9 @@ class PostLoginCommandRunner:
     def _is_ready_for_commands(self, index):
         if self.launcher.is_running:
             return False, "LOGIN_SEQUENCE_RUNNING"
+
+        if getattr(self.launcher, "pause_requested", False):
+            return False, "PAUSED"
 
         if self._account_is_recovering(index):
             return False, "RECOVERING"
@@ -259,6 +273,9 @@ class PostLoginCommandRunner:
         if problem_index is None:
             self.problem_key = None
             self.problem_started_at = None
+            return
+
+        if problem_reason == "PAUSED":
             return
 
         key = (problem_index, str(problem_reason))
@@ -350,34 +367,72 @@ class PostLoginCommandRunner:
 
             self.problem_key = None
             self.problem_started_at = None
+            completed_round = True
 
             for index in ready_indices:
                 if self.stop_event.is_set():
+                    completed_round = False
                     break
 
                 ok, reason = self._is_ready_for_commands(index)
                 if not ok:
+                    completed_round = False
                     self._track_problem_or_recover(index, reason)
                     break
 
                 session = self.launcher.active_sessions.get(index)
                 if not session:
+                    completed_round = False
                     self._track_problem_or_recover(index, "NO_SESSION")
                     break
 
                 result = self._run_account_commands(index, session)
                 if result != "OK":
+                    completed_round = False
                     self._track_problem_or_recover(index, result)
                     break
 
                 self._sleep_interruptible(self._account_delay_seconds())
 
-            self.cycle_count += 1
-            print(f"Post-login commands round finished - round={self.cycle_count}")
-            self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
-            self._sleep_interruptible(self._round_delay_seconds())
+            if completed_round:
+                self.cycle_count += 1
+                print(f"Post-login commands round finished - round={self.cycle_count}")
+                self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
+                self._sleep_interruptible(self._round_delay_seconds())
 
         print("Post-login command runner loop stopped")
+
+    def _activate_account_window(self, index, session):
+        pid = session.get("pid")
+        if not pid:
+            return False, "NO_PID"
+
+        detector = getattr(self.launcher, "window_disconnect_detector", None)
+        if detector is None:
+            return False, "NO_WINDOW_ACTIVATOR"
+
+        try:
+            activated = detector.activate_main_window(pid)
+        except Exception as error:
+            print(
+                "Post-login foreground error - "
+                f"account={index + 1} - pid={pid} - {error}"
+            )
+            return False, "FOREGROUND_ERROR"
+
+        if not activated:
+            print(
+                "Post-login foreground failed - "
+                f"account={index + 1} - pid={pid}"
+            )
+            return False, "FOREGROUND_FAILED"
+
+        print(
+            "Post-login foreground ready - "
+            f"account={index + 1} - pid={pid}"
+        )
+        time.sleep(0.15)
+        return True, "FOREGROUND_OK"
 
     def _run_account_commands(self, index, session):
         pid = session.get("pid")
@@ -386,15 +441,23 @@ class PostLoginCommandRunner:
 
         try:
             with AutomationInputLock.hold("PostLoginCommandRunner.stage1"):
+                activated, activate_reason = self._activate_account_window(index, session)
+                if not activated:
+                    return activate_reason
+
+                ok, reason = self._is_ready_for_commands(index)
+                if not ok:
+                    return reason
+
                 # Stage 1 intentionally does not click or type.
-                # Next stages will put Drop/Use/Sash here.
+                # Next stages will put Drop/Use/Sash here, after this foreground step.
                 print(
                     "Post-login command step - "
                     f"account={index + 1} - pid={pid} - name={page_name!r} - "
-                    "stage=READY_CHECK_ONLY"
+                    "stage=FOREGROUND_READY_CHECK_ONLY"
                 )
                 self._set_status(
-                    f"أوامر الدخول: الحساب {index + 1} جاهز - مرحلة اختبار فقط"
+                    f"أوامر الدخول: الحساب {index + 1} على الوش - مرحلة اختبار فقط"
                 )
                 time.sleep(0.05)
             return "OK"
