@@ -315,6 +315,44 @@ class LoginTask(BaseTask):
                 pydirectinput.press("capslock")
                 time.sleep(0.08)
 
+    def _enter_credentials_at_positions(self, username, password, positions):
+        (
+            username_x,
+            username_y,
+            password_x,
+            password_y,
+            _
+        ) = positions
+
+        if not self._ensure_target_window():
+            return False
+
+        pydirectinput.click(username_x, username_y)
+        time.sleep(0.20)
+
+        self.clear_username_field()
+        time.sleep(0.10)
+
+        self._type_exact(username, interval=0.04)
+        time.sleep(0.20)
+
+        if not self._ensure_target_window():
+            raise RuntimeError(
+                f"Target focus lost after username; expected PID {self.target_pid}"
+            )
+
+        pydirectinput.click(password_x, password_y)
+        time.sleep(0.15)
+        self._type_exact(password, interval=0.04)
+        time.sleep(0.15)
+
+        if self.target_pid and self._foreground_pid() != self.target_pid:
+            raise RuntimeError(
+                f"Target focus lost after password; expected PID {self.target_pid}"
+            )
+
+        return True
+
     def start(self, username=None, password=None, target_pid=None):
 
         self.running = True
@@ -335,11 +373,14 @@ class LoginTask(BaseTask):
             return False
 
         start_time = time.time()
+        last_positions = None
+        last_positions_time = 0.0
+        interrupted_attempts = 0
 
         while self.running:
 
-            if time.time() - start_time > 30:
-                print("Login fields not found")
+            if time.time() - start_time > 45:
+                print("Login fields not found or login focus was not stable")
                 self.running = False
                 return False
 
@@ -350,45 +391,47 @@ class LoginTask(BaseTask):
             positions = self.find_login_fields()
 
             if positions:
-                (
-                    username_x,
-                    username_y,
-                    password_x,
-                    password_y,
-                    _
-                ) = positions
-
-                if not self._ensure_target_window():
-                    time.sleep(0.20)
-                    continue
-
-                try:
-                    pydirectinput.click(username_x, username_y)
-                    time.sleep(0.20)
-
-                    self.clear_username_field()
-                    time.sleep(0.10)
-
-                    self._type_exact(username, interval=0.04)
-                    time.sleep(0.20)
-
-                    if not self._ensure_target_window():
-                        continue
-
-                    pydirectinput.click(password_x, password_y)
-                    time.sleep(0.15)
-                    self._type_exact(password, interval=0.04)
-                except RuntimeError as error:
-                    print(f"Login safety: {error}")
-                    time.sleep(0.25)
-                    continue
-
+                last_positions = positions
+                last_positions_time = time.time()
+            elif last_positions and time.time() - last_positions_time < 20.0:
+                # If the user clicks another window while we are typing, the
+                # username field may become partially filled.  That can lower
+                # the template score, even though the login form is still in the
+                # exact same PID window.  Reuse the last verified coordinates
+                # for a controlled retry instead of losing the account step.
+                positions = last_positions
                 print(
-                    f"Login credentials entered for {username} on target PID {self.target_pid}"
+                    f"Login fields using cached PID coordinates after interrupted focus - "
+                    f"PID {self.target_pid}"
                 )
 
-                self.running = False
-                return True
+            if positions:
+                try:
+                    if self._enter_credentials_at_positions(username, password, positions):
+                        print(
+                            f"Login credentials entered for {username} on target PID {self.target_pid}"
+                        )
+
+                        self.running = False
+                        return True
+
+                except RuntimeError as error:
+                    interrupted_attempts += 1
+                    print(
+                        f"Login safety: {error}; refocusing PID {self.target_pid} "
+                        f"and retrying credentials ({interrupted_attempts}/5)"
+                    )
+                    self._ensure_target_window()
+                    time.sleep(0.25)
+
+                    if interrupted_attempts >= 5:
+                        print(
+                            f"Login safety: focus was interrupted too many times for PID {self.target_pid}"
+                        )
+                        self.running = False
+                        return False
+
+                    continue
 
             time.sleep(0.5)
 
