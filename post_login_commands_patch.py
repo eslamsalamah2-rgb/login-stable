@@ -18,6 +18,8 @@ except Exception:
 
 _ORIGINAL_SELECTION_INIT = SelectionAwareLauncher.__init__
 _ORIGINAL_PROCESS_ACCOUNTS = SelectionAwareLauncher.process_accounts
+_ORIGINAL_PAUSE_PROCESSING = SelectionAwareLauncher.pause_processing
+_ORIGINAL_RESUME_PROCESSING = SelectionAwareLauncher.resume_processing
 _ORIGINAL_CLOSE_PROGRAM = SelectionAwareLauncher.close_program
 _ORIGINAL_MARK_RECOVERY_STARTED = SelectionAwareLauncher._mark_recovery_started
 _ORIGINAL_MARK_RECOVERY_FINISHED = SelectionAwareLauncher._mark_recovery_finished
@@ -108,6 +110,47 @@ def _selection_init_with_post_login_commands(self):
         print(f"Could not schedule post-login startup scan: {error}")
 
 
+def _start_or_resume_with_commands(self):
+    """Hotkey Start behavior.
+
+    If selected accounts still need pages, start the login sequence.
+    If all selected accounts are already READY, start/resume post-login commands.
+    """
+    runner = getattr(self, "post_login_runner", None)
+
+    try:
+        if not self.is_running and hasattr(self, "_build_incremental_start_queue"):
+            selected, pending = self._build_incremental_start_queue()
+            if selected and pending:
+                print(
+                    "Start hotkey: selected accounts need login - "
+                    f"opening {[i + 1 for i in pending]}"
+                )
+                return self.start_from_beginning()
+    except Exception as error:
+        print(f"Start hotkey pending check failed: {error}")
+
+    result = _ORIGINAL_RESUME_PROCESSING(self)
+
+    if runner is not None:
+        try:
+            self.app.after(
+                500,
+                lambda: runner.start_if_ready("start_hotkey_8"),
+            )
+        except Exception as error:
+            print(f"Could not start commands from Start hotkey: {error}")
+
+    return result
+
+
+def _pause_with_commands_stop(self):
+    runner = getattr(self, "post_login_runner", None)
+    if runner is not None:
+        runner.request_stop("stop_hotkey_9_or_pause")
+    return _ORIGINAL_PAUSE_PROCESSING(self)
+
+
 def _process_accounts_then_commands(self):
     runner = getattr(self, "post_login_runner", None)
     if runner is not None:
@@ -165,6 +208,8 @@ def apply_post_login_commands_patch():
     SelectionAwareLauncher.start_post_login_commands = _manual_start_commands
     SelectionAwareLauncher.stop_post_login_commands = _manual_stop_commands
     SelectionAwareLauncher.__init__ = _selection_init_with_post_login_commands
+    SelectionAwareLauncher.resume_processing = _start_or_resume_with_commands
+    SelectionAwareLauncher.pause_processing = _pause_with_commands_stop
     SelectionAwareLauncher.process_accounts = _process_accounts_then_commands
     SelectionAwareLauncher._mark_recovery_started = _mark_recovery_started_with_command_pause
     SelectionAwareLauncher._mark_recovery_finished = _mark_recovery_finished_with_command_resume
