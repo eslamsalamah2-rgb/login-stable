@@ -9,9 +9,9 @@ class PostLoginCommandRunner:
     """Runs post-login commands after selected accounts become READY.
 
     Stage 1 is an orchestration/safety layer only.
-    In Test Mode it foregrounds each selected READY page once so we can verify
-    ordering, then stops. Real command modules will foreground only the account
-    they are about to execute on.
+    Test Mode runs continuously in the background and never foregrounds pages.
+    Real command modules must foreground only the account they are about to
+    execute on, immediately before the actual command step.
     """
 
     def __init__(self, launcher):
@@ -142,7 +142,7 @@ class PostLoginCommandRunner:
             )
             self.thread.start()
 
-        mode = "FOREGROUND_TEST_ONCE" if self._debug_only() else "COMMAND_LOOP"
+        mode = "BACKGROUND_TEST_LOOP" if self._debug_only() else "COMMAND_LOOP"
         print(
             "Post-login commands started - "
             f"reason={reason} - mode={mode} - accounts={[i + 1 for i in ready_indices]}"
@@ -386,8 +386,8 @@ class PostLoginCommandRunner:
 
             if self._debug_only():
                 print(
-                    "Post-login foreground test round started - "
-                    "each selected READY page will be brought to front once only"
+                    "Post-login background test round started - "
+                    "checking selected READY accounts without foreground activation"
                 )
 
             for index in ready_indices:
@@ -420,17 +420,16 @@ class PostLoginCommandRunner:
 
                 if self._debug_only():
                     print(
-                        "Post-login foreground test round finished - "
-                        f"round={self.cycle_count} - stopping test loop"
+                        "Post-login background test round finished - "
+                        f"round={self.cycle_count} - continuing in background"
                     )
                     self._set_status(
-                        f"اختبار أوامر الدخول انتهى - تم عرض {len(ready_indices)} صفحة مرة واحدة"
+                        f"اختبار أوامر الدخول يعمل في الخلفية - دورة {self.cycle_count}"
                     )
-                    self.stop_event.set()
-                    break
+                else:
+                    print(f"Post-login commands round finished - round={self.cycle_count}")
+                    self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
 
-                print(f"Post-login commands round finished - round={self.cycle_count}")
-                self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
                 self._sleep_interruptible(self._round_delay_seconds())
 
         print("Post-login command runner loop stopped")
@@ -473,7 +472,23 @@ class PostLoginCommandRunner:
         self.current_index = index
 
         try:
-            with AutomationInputLock.hold("PostLoginCommandRunner.stage1"):
+            if self._debug_only():
+                ok, reason = self._is_ready_for_commands(index)
+                if not ok:
+                    return reason
+
+                print(
+                    "Post-login command step - "
+                    f"account={index + 1} - pid={pid} - name={page_name!r} - "
+                    "stage=BACKGROUND_TEST_ONLY"
+                )
+                self._set_status(
+                    f"اختبار أوامر الدخول: الحساب {index + 1} جاهز في الخلفية"
+                )
+                self._sleep_interruptible(self._test_hold_seconds())
+                return "OK"
+
+            with AutomationInputLock.hold("PostLoginCommandRunner.real_command"):
                 activated, activate_reason = self._activate_account_window(index, session)
                 if not activated:
                     return activate_reason
@@ -482,21 +497,9 @@ class PostLoginCommandRunner:
                 if not ok:
                     return reason
 
-                if self._debug_only():
-                    print(
-                        "Post-login command step - "
-                        f"account={index + 1} - pid={pid} - name={page_name!r} - "
-                        "stage=FOREGROUND_TEST_ONLY"
-                    )
-                    self._set_status(
-                        f"اختبار أوامر الدخول: الحساب {index + 1} على الوش فقط"
-                    )
-                    time.sleep(self._test_hold_seconds())
-                    return "OK"
-
                 # Real command modules will be called here one by one.
                 # The foreground activation above must stay immediately before
-                # the actual command execution, not as a separate endless scan.
+                # the actual command execution, not as a separate scan.
                 print(
                     "Post-login command step - "
                     f"account={index + 1} - pid={pid} - name={page_name!r} - "
