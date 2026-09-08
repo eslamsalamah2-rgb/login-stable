@@ -25,9 +25,12 @@ class LoginTask(BaseTask):
         )
 
         self.credentials_path = "credentials.json"
-        # Keep a conservative threshold; robustness comes from PID-bound
-        # window capture + multi-scale/color-gray confirmation, not lowering it.
+        # Keep 0.80 as the normal acceptance threshold. A genuine login panel
+        # on this client can repeatedly land just under it (~0.798), so use a
+        # second PID-bound confirmation instead of blindly lowering the main
+        # threshold for every match.
         self.threshold = 0.80
+        self.confirm_threshold = 0.78
         self.match_scales = (0.94, 0.97, 1.00, 1.03, 1.06)
         self.target_pid = None
         self.window_helper = WindowDisconnectDetector()
@@ -225,7 +228,64 @@ class LoginTask(BaseTask):
             )
 
         if combined < self.threshold:
-            return None
+            # Near-threshold matches are accepted only after a second capture
+            # from the exact same PID window confirms the same panel position.
+            # This handles the repeatable ~0.798 real match without making the
+            # detector globally permissive.
+            if combined < self.confirm_threshold:
+                return None
+
+            time.sleep(0.12)
+            confirm_screen, confirm_left, confirm_top = self._capture_target_window(pid)
+            if confirm_screen is None:
+                return None
+
+            confirm = self._best_login_match(confirm_screen, template)
+            if confirm is None:
+                return None
+
+            (
+                confirm_combined,
+                confirm_color,
+                confirm_gray,
+                confirm_location,
+                confirm_w,
+                confirm_h,
+                confirm_scale,
+            ) = confirm
+
+            location_delta = (
+                abs(confirm_location[0] - location[0])
+                + abs(confirm_location[1] - location[1])
+            )
+            size_delta = abs(confirm_w - template_w) + abs(confirm_h - template_h)
+
+            if (
+                confirm_combined < self.confirm_threshold
+                or location_delta > 6
+                or size_delta > 6
+            ):
+                if verbose:
+                    print(
+                        f"Login fields near-match rejected - PID {pid}: "
+                        f"first={combined:.3f} confirm={confirm_combined:.3f} "
+                        f"location_delta={location_delta} size_delta={size_delta}"
+                    )
+                return None
+
+            if verbose:
+                print(
+                    f"Login fields confirmed by repeat - PID {pid}: "
+                    f"first={combined:.3f} confirm={confirm_combined:.3f} "
+                    f"scale={confirm_scale:.2f}"
+                )
+
+            # Use the confirmed capture/location for click coordinates.
+            screen_left = confirm_left
+            screen_top = confirm_top
+            location = confirm_location
+            template_w = confirm_w
+            template_h = confirm_h
 
         left = screen_left + location[0]
         top = screen_top + location[1]
@@ -258,184 +318,124 @@ class LoginTask(BaseTask):
         text = str(text)
 
         caps_was_on = False
+
         try:
-            import ctypes
-            caps_was_on = bool(ctypes.windll.user32.GetKeyState(0x14) & 0x0001)
+            caps_was_on = bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
         except Exception:
             caps_was_on = False
 
+        if caps_was_on:
+            pydirectinput.press("capslock")
+            time.sleep(0.05)
+
         try:
-            if caps_was_on:
-                pydirectinput.press("capslock")
-                time.sleep(0.08)
+            for character in text:
+                if self.target_pid and not self._ensure_target_window():
+                    return False
 
-            for char in text:
-                if self.target_pid and self._foreground_pid() != self.target_pid:
-                    raise RuntimeError(
-                        f"Target focus lost while typing; expected PID {self.target_pid}"
-                    )
-
-                if "A" <= char <= "Z":
-                    key = char.lower()
+                if character.isalpha() and character.isupper():
                     pydirectinput.keyDown("shift")
-                    pydirectinput.press(key)
+                    pydirectinput.press(character.lower())
                     pydirectinput.keyUp("shift")
                 else:
-                    pydirectinput.write(char)
+                    pydirectinput.press(character.lower() if character.isalpha() else character)
 
-                if interval:
-                    time.sleep(interval)
+                time.sleep(interval)
 
+            return True
         finally:
-            try:
-                pydirectinput.keyUp("shift")
-            except Exception:
-                pass
-
             if caps_was_on:
                 pydirectinput.press("capslock")
-                time.sleep(0.08)
+
+    def _click(self, x, y):
+        pydirectinput.click(x, y)
+        time.sleep(0.15)
 
     def start(self, username=None, password=None, target_pid=None):
-
-        self.running = True
-
         if target_pid is not None:
             self.set_target_pid(target_pid)
-        else:
-            shared_pid = TargetWindowContext.get_pid()
-            if shared_pid:
-                self.target_pid = shared_pid
 
-        if username is None or password is None:
+        if not username or not password:
             username, password = self.load_credentials()
 
         if not username or not password:
-            print("Login credentials missing or incomplete")
-            self.running = False
+            print("Credentials are missing")
             return False
 
-        start_time = time.time()
-
-        while self.running:
-
-            if time.time() - start_time > 30:
-                print("Login fields not found")
-                self.running = False
-                return False
-
-            if not self._ensure_target_window():
+        for _ in range(12):
+            if self.target_pid and not self._ensure_target_window():
                 time.sleep(0.25)
                 continue
 
-            positions = self.find_login_fields()
+            fields = self.find_login_fields(target_pid=self.target_pid)
 
-            if positions:
-                (
-                    username_x,
-                    username_y,
-                    password_x,
-                    password_y,
-                    _
-                ) = positions
+            if fields:
+                username_x, username_y, password_x, password_y, password_clear_x = fields
 
-                if not self._ensure_target_window():
-                    time.sleep(0.20)
-                    continue
+                if self.target_pid and not self._ensure_target_window():
+                    return False
 
-                try:
-                    pydirectinput.click(username_x, username_y)
-                    time.sleep(0.20)
+                self._click(username_x, username_y)
+                pydirectinput.hotkey("ctrl", "a")
+                time.sleep(0.08)
+                self.clear_username_field()
 
-                    self.clear_username_field()
-                    time.sleep(0.10)
+                if not self._type_exact(username):
+                    return False
 
-                    self._type_exact(username, interval=0.04)
-                    time.sleep(0.20)
+                if self.target_pid and not self._ensure_target_window():
+                    return False
 
-                    if not self._ensure_target_window():
-                        continue
+                self._click(password_clear_x, password_y)
+                pydirectinput.hotkey("ctrl", "a")
+                time.sleep(0.08)
+                self.clear_password_field()
 
-                    pydirectinput.click(password_x, password_y)
-                    time.sleep(0.15)
-                    self._type_exact(password, interval=0.04)
-                except RuntimeError as error:
-                    print(f"Login safety: {error}")
-                    time.sleep(0.25)
-                    continue
+                if not self._type_exact(password):
+                    return False
 
                 print(
                     f"Login credentials entered for {username} on target PID {self.target_pid}"
                 )
-
-                self.running = False
                 return True
 
-            time.sleep(0.5)
+            time.sleep(0.25)
 
+        print("Login fields not found")
         return False
 
-    def rewrite_password(self, password, timeout=5.0, target_pid=None):
+    def rewrite_password(self, password, target_pid=None):
+        if target_pid is not None:
+            self.set_target_pid(target_pid)
+
         if not password:
             return False
 
-        if target_pid is not None:
-            self.set_target_pid(target_pid)
-        else:
-            shared_pid = TargetWindowContext.get_pid()
-            if shared_pid:
-                self.target_pid = shared_pid
-
-        start_time = time.time()
-        positions = None
-
-        while time.time() - start_time < timeout:
-            if not self._ensure_target_window():
-                time.sleep(0.20)
+        for _ in range(10):
+            if self.target_pid and not self._ensure_target_window():
+                time.sleep(0.25)
                 continue
 
-            positions = self.find_login_fields()
-            if positions:
-                break
-            time.sleep(0.20)
+            fields = self.find_login_fields(target_pid=self.target_pid)
+            if not fields:
+                time.sleep(0.25)
+                continue
 
-        if not positions:
-            print("Password retry: login fields not found after OK")
-            return False
+            _, _, password_x, password_y, password_clear_x = fields
 
-        if not self._ensure_target_window():
-            return False
-
-        (
-            _,
-            _,
-            password_x,
-            password_y,
-            password_clear_x
-        ) = positions
-
-        try:
-            pydirectinput.click(password_clear_x, password_y)
-            time.sleep(0.20)
-
-            self.clear_password_field()
-            time.sleep(0.15)
-
-            if not self._ensure_target_window():
+            if self.target_pid and not self._ensure_target_window():
                 return False
 
-            pydirectinput.click(password_x, password_y)
-            time.sleep(0.15)
-            self._type_exact(password, interval=0.04)
-            time.sleep(0.20)
-        except RuntimeError as error:
-            print(f"Password retry safety: {error}")
-            return False
+            self._click(password_clear_x, password_y)
+            pydirectinput.hotkey("ctrl", "a")
+            time.sleep(0.08)
+            self.clear_password_field()
 
-        print(
-            f"Password rewritten on target PID {self.target_pid} with exact letter case"
-        )
-        return True
+            if not self._type_exact(password):
+                return False
 
-    def stop(self):
-        self.running = False
+            print(f"Password rewritten on target PID {self.target_pid}")
+            return True
+
+        print("Password field not found")
+        return False
