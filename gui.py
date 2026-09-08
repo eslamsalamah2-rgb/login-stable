@@ -25,6 +25,22 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+DEFAULT_RUNTIME_SETTINGS = {
+    "start_game_threshold": 0.82,
+    "login_fields_threshold": 0.80,
+    "login_fields_near_threshold": 0.795,
+    "post_login_threshold": 0.82,
+    "ok_threshold": 0.82,
+    "timer_anchor_threshold": 0.78,
+    "start_game_timeout": 20.0,
+    "new_pid_timeout": 20.0,
+    "ready_timeout": 90.0,
+    "post_login_timeout": 6.0,
+    "health_check_seconds": 10.0,
+    "start_game_attempts": 3,
+}
+
+
 class SimpleLauncher:
 
     def __init__(self):
@@ -46,6 +62,7 @@ class SimpleLauncher:
         self.current_account_index = 0
         self.pause_requested = False
         self.is_running = False
+        self.runtime_settings = dict(DEFAULT_RUNTIME_SETTINGS)
 
         # Successful pages are registered here by account-row index.
         # The monitor only observes them for now; it does NOT reopen anything.
@@ -538,9 +555,17 @@ class SimpleLauncher:
             f"الحساب {account_number}/{total_accounts}: جاري تحديد conquer.exe الجديد..."
         )
 
+        launcher_pid = None
+        try:
+            if self.launcher.process is not None:
+                launcher_pid = self.launcher.process.pid
+        except Exception:
+            launcher_pid = None
+
         conquer_pid = ConquerMemoryReader.wait_for_new_conquer_pid(
             previous_conquer_pids,
-            timeout=20.0
+            timeout=30.0,
+            launcher_pid=launcher_pid,
         )
 
         if conquer_pid is None:
@@ -638,17 +663,16 @@ class SimpleLauncher:
                     return "LOGIN_BUTTON_ERROR", None
 
         self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري قراءة اسم الشخصية من Memory..."
+            f"الحساب {account_number}/{total_accounts}: في انتظار تغير اسم الشخصية في Memory..."
         )
 
         page_name = memory_reader.wait_for_name_change(
             previous_value=initial_name,
-            timeout=20.0,
-            require_change=True
+            timeout=None,
+            require_change=True,
+            check_interval=10.0
         )
 
-        # Read the new state once as useful test output. Continuous monitoring
-        # begins after the account has been registered below.
         final_state = memory_reader.read_state()
         print(
             f"Conquer PID {conquer_pid} state after login: "
@@ -664,50 +688,39 @@ class SimpleLauncher:
             f"Account {account_number} ready - PID {conquer_pid} - Name: {page_name}"
         )
 
-        # Register the exact PID against this account row. From this point the
-        # background monitor will check STATE_OFFSET every 10 seconds.
         self.active_sessions[account_number - 1] = {
             "pid": conquer_pid,
             "username": username,
+            "password": password,
             "page_name": page_name,
         }
 
         return "SUCCESS", page_name
 
-    # ------------------------------------------------------------------
-    # Continuous account-state monitor (test phase: observe only)
-    # ------------------------------------------------------------------
-
     def monitor_active_sessions(self):
-        """Check every successful account's state once every 10 seconds.
-
-        Current test behavior:
-        - 7667828 / LOGGED_IN -> green lamp
-        - 0 / OPEN -> red lamp
-        - 7667712 / LOGGED_OUT -> red lamp
-        - unknown value, dead PID, or read error -> red lamp
-
-        No automatic relog/reopen happens in this test phase.
-        """
+        """Read the state value for each successful page every 10 seconds."""
         while not self.monitor_stop_event.is_set():
             sessions = list(self.active_sessions.items())
 
             for row_index, session in sessions:
                 pid = session.get("pid")
 
-                if not pid:
+                if not pid or pid not in ConquerMemoryReader.list_conquer_pids():
+                    self.set_row_state(row_index, "error")
                     continue
 
                 reader = None
-                value = None
 
                 try:
                     reader = ConquerMemoryReader(pid)
                     value = reader.read_state()
+
                 except Exception as error:
                     print(
-                        f"State monitor could not open PID {pid}: {error}"
+                        f"State monitor error - account {row_index + 1} - PID {pid}: {error}"
                     )
+                    self.set_row_state(row_index, "error")
+
                 finally:
                     if reader is not None:
                         reader.close()
@@ -731,11 +744,76 @@ class SimpleLauncher:
     # General helpers
     # ------------------------------------------------------------------
 
+    def _coerce_runtime_setting(self, key, value):
+        default = DEFAULT_RUNTIME_SETTINGS.get(key)
+
+        try:
+            if isinstance(default, int) and not isinstance(default, bool):
+                return max(1, int(float(value)))
+
+            if isinstance(default, float):
+                value = float(value)
+                # Thresholds are percentages in matchTemplate. Timeouts are seconds.
+                if "threshold" in key:
+                    return max(0.0, min(1.0, value))
+                return max(0.1, value)
+        except Exception:
+            return default
+
+        return value
+
+    def get_runtime_setting(self, key, default=None):
+        if default is None:
+            default = DEFAULT_RUNTIME_SETTINGS.get(key)
+        try:
+            return self.runtime_settings.get(key, default)
+        except Exception:
+            return default
+
+    def apply_runtime_settings(self):
+        """Apply editable settings to the already-created task objects."""
+        settings = getattr(self, "runtime_settings", {}) or {}
+
+        def value(key):
+            return self._coerce_runtime_setting(
+                key,
+                settings.get(key, DEFAULT_RUNTIME_SETTINGS.get(key))
+            )
+
+        try:
+            self.start_game_task.threshold = value("start_game_threshold")
+        except Exception:
+            pass
+
+        try:
+            self.login_task.threshold = value("login_fields_threshold")
+            self.login_task.near_threshold = value("login_fields_near_threshold")
+        except Exception:
+            pass
+
+        try:
+            self.post_login_task.threshold = value("post_login_threshold")
+            self.post_login_task.ok_threshold = value("ok_threshold")
+        except Exception:
+            pass
+
+        try:
+            self.timer_heartbeat_detector.anchor_threshold = value("timer_anchor_threshold")
+        except Exception:
+            pass
+
     def save_settings(self):
         try:
             data = {
                 "selected_path": self.path_entry.get().strip()
             }
+
+            runtime_settings = getattr(self, "runtime_settings", {}) or {}
+            for key, default in DEFAULT_RUNTIME_SETTINGS.items():
+                data[key] = self._coerce_runtime_setting(
+                    key,
+                    runtime_settings.get(key, default)
+                )
 
             with open(
                 CONFIG_FILE,
@@ -749,11 +827,12 @@ class SimpleLauncher:
                     indent=4
                 )
 
-        except Exception:
-            pass
+        except Exception as error:
+            print(f"Failed to save settings: {error}")
 
     def load_settings(self):
         if not os.path.exists(CONFIG_FILE):
+            self.apply_runtime_settings()
             return
 
         try:
@@ -769,8 +848,19 @@ class SimpleLauncher:
             if path:
                 self.path_entry.insert(0, path)
 
-        except Exception:
-            pass
+            self.runtime_settings = dict(DEFAULT_RUNTIME_SETTINGS)
+            for key, default in DEFAULT_RUNTIME_SETTINGS.items():
+                self.runtime_settings[key] = self._coerce_runtime_setting(
+                    key,
+                    data.get(key, default)
+                )
+
+            self.apply_runtime_settings()
+
+        except Exception as error:
+            print(f"Failed to load settings: {error}")
+            self.runtime_settings = dict(DEFAULT_RUNTIME_SETTINGS)
+            self.apply_runtime_settings()
 
     def set_status(self, text):
         self.app.after(
