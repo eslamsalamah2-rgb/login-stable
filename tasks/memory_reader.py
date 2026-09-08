@@ -83,23 +83,82 @@ class ConquerMemoryReader:
             return False
 
     @classmethod
-    def wait_for_new_conquer_pid(cls, previous_pids, timeout=20.0):
+    def wait_for_new_conquer_pid(cls, previous_pids, timeout=30.0, launcher_pid=None):
+        """Wait for the Conquer page created by the current Start Game click.
+
+        Primary detection remains the safe rule used by the stable build: a
+        conquer.exe PID that did not exist before this launch. We also inspect
+        the launcher child-process tree when a launcher PID is available.
+        Progress is logged so the program never appears silently frozen here.
+        """
         start_time = time.time()
+        previous_pids = set(previous_pids or ())
+        last_progress_second = -1
+
+        print(
+            f"Waiting for new Conquer PID - before={sorted(previous_pids)} "
+            f"- launcher_pid={launcher_pid}"
+        )
 
         while time.time() - start_time < timeout:
             current_pids = cls.list_conquer_pids()
-            new_pids = current_pids - set(previous_pids)
+            new_pids = current_pids - previous_pids
 
             if new_pids:
-                # The exact newly created page becomes the only page that the
-                # screen-based login tasks are allowed to touch.
-                pid = max(new_pids)
+                def _created_at(pid):
+                    try:
+                        return psutil.Process(pid).create_time()
+                    except Exception:
+                        return 0.0
+
+                pid = max(new_pids, key=_created_at)
                 TargetWindowContext.set_pid(pid)
-                print(f"Target Conquer PID locked: {pid}")
+                print(f"Target Conquer PID locked: {pid} (new process)")
                 return pid
+
+            if launcher_pid:
+                try:
+                    launcher_process = psutil.Process(int(launcher_pid))
+                    descendants = launcher_process.children(recursive=True)
+                    child_candidates = []
+
+                    for child in descendants:
+                        try:
+                            if child.pid in previous_pids:
+                                continue
+                            if (child.name() or "").lower() != cls.PROCESS_NAME:
+                                continue
+                            child_candidates.append(child)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+
+                    if child_candidates:
+                        child_candidates.sort(
+                            key=lambda proc: proc.create_time(),
+                            reverse=True,
+                        )
+                        pid = child_candidates[0].pid
+                        TargetWindowContext.set_pid(pid)
+                        print(f"Target Conquer PID locked: {pid} (launcher child)")
+                        return pid
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            elapsed = int(time.time() - start_time)
+            if elapsed != last_progress_second and elapsed % 2 == 0:
+                last_progress_second = elapsed
+                print(
+                    f"Waiting for new Conquer PID... {elapsed}/{int(timeout)}s "
+                    f"- current={sorted(current_pids)}"
+                )
 
             time.sleep(0.25)
 
+        final_pids = cls.list_conquer_pids()
+        print(
+            f"New Conquer PID timeout after {timeout:.0f}s - "
+            f"before={sorted(previous_pids)} - current={sorted(final_pids)}"
+        )
         return None
 
     def __init__(self, pid):
