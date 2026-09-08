@@ -9,9 +9,9 @@ class PostLoginCommandRunner:
     """Runs post-login commands after selected accounts become READY.
 
     Stage 1 is an orchestration/safety layer only.
-    Test Mode runs continuously in the background and never foregrounds pages.
-    Real command modules must foreground only the account they are about to
-    execute on, immediately before the actual command step.
+    Test Mode runs continuously in the background, but it checks only the
+    account whose turn would be executed next. Real command modules must
+    foreground only that same account immediately before the actual command.
     """
 
     def __init__(self, launcher):
@@ -20,6 +20,7 @@ class PostLoginCommandRunner:
         self.thread = None
         self.cycle_count = 0
         self.current_index = None
+        self.next_position = 0
         self.problem_key = None
         self.problem_started_at = None
         self.last_wait_log_at = 0.0
@@ -125,6 +126,7 @@ class PostLoginCommandRunner:
             self._set_status("أوامر الدخول: لا توجد مهمة فعلية مفعلة")
             return False
 
+        # First entry into stage 2 still requires all selected accounts to be READY.
         ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
         if not ok:
             self._log_waiting(problem_index, problem_reason, reason)
@@ -134,6 +136,9 @@ class PostLoginCommandRunner:
             if self.is_running():
                 return True
 
+            self.next_position = 0
+            self.problem_key = None
+            self.problem_started_at = None
             self.stop_event.clear()
             self.thread = threading.Thread(
                 target=self._run_loop,
@@ -142,7 +147,7 @@ class PostLoginCommandRunner:
             )
             self.thread.start()
 
-        mode = "BACKGROUND_TEST_LOOP" if self._debug_only() else "COMMAND_LOOP"
+        mode = "CURRENT_ACCOUNT_BACKGROUND_TEST" if self._debug_only() else "COMMAND_LOOP"
         print(
             "Post-login commands started - "
             f"reason={reason} - mode={mode} - accounts={[i + 1 for i in ready_indices]}"
@@ -158,7 +163,7 @@ class PostLoginCommandRunner:
         self._set_status("أوامر الدخول متوقفة")
 
     def pause_for_login_priority(self, reason="login_priority"):
-        # The loop is cooperative. It will see is_running/recovery flags and wait.
+        # The loop is cooperative. It will see Login/Recovery activity and wait.
         print(f"Post-login commands yielding to Login/Health - reason={reason}")
 
     # ------------------------------------------------------------------
@@ -183,6 +188,22 @@ class PostLoginCommandRunner:
                 return index in self.launcher.recovering_accounts
         except Exception:
             return False
+
+    def _any_account_recovering(self):
+        try:
+            with self.launcher.recovering_accounts_lock:
+                return bool(self.launcher.recovering_accounts)
+        except Exception:
+            return False
+
+    def _login_priority_active(self):
+        if getattr(self.launcher, "is_running", False):
+            return True, "LOGIN_SEQUENCE_RUNNING"
+
+        if self._any_account_recovering():
+            return True, "RECOVERY_RUNNING"
+
+        return False, ""
 
     def _read_health(self, pid):
         try:
@@ -300,11 +321,11 @@ class PostLoginCommandRunner:
             self.problem_key = key
             self.problem_started_at = now
             print(
-                "Post-login commands paused for Login/Health - "
+                "Post-login commands paused at current account - "
                 f"account={problem_index + 1} - reason={problem_reason}"
             )
             self._set_status(
-                f"أوامر الدخول متوقفة مؤقتًا - الحساب {problem_index + 1}: {problem_reason}"
+                f"أوامر الدخول واقفة عند الحساب {problem_index + 1}: {problem_reason}"
             )
             return
 
@@ -372,56 +393,69 @@ class PostLoginCommandRunner:
         print("Post-login command runner loop active")
 
         while not self.stop_event.is_set():
-            ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
+            priority_active, priority_reason = self._login_priority_active()
+            if priority_active:
+                self._log_waiting(None, priority_reason, "login_priority")
+                self._sleep_interruptible(0.5)
+                continue
 
+            selected = self._selected_indices()
+            if not selected:
+                self._log_waiting(None, "NO_SELECTED_ACCOUNTS", "loop")
+                self._sleep_interruptible(1.0)
+                continue
+
+            if self.next_position >= len(selected):
+                self.next_position = 0
+
+            index = selected[self.next_position]
+            self.current_index = index
+
+            ok, reason = self._is_ready_for_commands(index)
             if not ok:
-                self._log_waiting(problem_index, problem_reason, "loop")
-                self._track_problem_or_recover(problem_index, problem_reason)
+                self._log_waiting(index, reason, "current_account")
+                self._track_problem_or_recover(index, reason)
                 self._sleep_interruptible(1.0)
                 continue
 
             self.problem_key = None
             self.problem_started_at = None
-            completed_round = True
+
+            session = self.launcher.active_sessions.get(index)
+            if not session:
+                self._track_problem_or_recover(index, "NO_SESSION")
+                self._sleep_interruptible(1.0)
+                continue
+
+            result = self._run_account_commands(index, session)
+            if result != "OK":
+                self._track_problem_or_recover(index, result)
+                self._sleep_interruptible(1.0)
+                continue
+
+            previous_position = self.next_position
+            self.next_position = (self.next_position + 1) % len(selected)
 
             if self._debug_only():
                 print(
-                    "Post-login background test round started - "
-                    "checking selected READY accounts without foreground activation"
+                    "Post-login current-account background test OK - "
+                    f"account={index + 1} - next_account={selected[self.next_position] + 1}"
+                )
+                self._set_status(
+                    f"اختبار أوامر الدخول: الحساب {index + 1} جاهز - التالي {selected[self.next_position] + 1}"
+                )
+            else:
+                print(
+                    "Post-login command account finished - "
+                    f"account={index + 1}"
                 )
 
-            for index in ready_indices:
-                if self.stop_event.is_set():
-                    completed_round = False
-                    break
-
-                ok, reason = self._is_ready_for_commands(index)
-                if not ok:
-                    completed_round = False
-                    self._track_problem_or_recover(index, reason)
-                    break
-
-                session = self.launcher.active_sessions.get(index)
-                if not session:
-                    completed_round = False
-                    self._track_problem_or_recover(index, "NO_SESSION")
-                    break
-
-                result = self._run_account_commands(index, session)
-                if result != "OK":
-                    completed_round = False
-                    self._track_problem_or_recover(index, result)
-                    break
-
-                self._sleep_interruptible(self._account_delay_seconds())
-
-            if completed_round:
+            if self.next_position == 0 and previous_position != self.next_position:
                 self.cycle_count += 1
-
                 if self._debug_only():
                     print(
-                        "Post-login background test round finished - "
-                        f"round={self.cycle_count} - continuing in background"
+                        "Post-login current-account background test round finished - "
+                        f"round={self.cycle_count}"
                     )
                     self._set_status(
                         f"اختبار أوامر الدخول يعمل في الخلفية - دورة {self.cycle_count}"
@@ -429,8 +463,9 @@ class PostLoginCommandRunner:
                 else:
                     print(f"Post-login commands round finished - round={self.cycle_count}")
                     self._set_status(f"أوامر الدخول - انتهاء دورة رقم {self.cycle_count}")
-
                 self._sleep_interruptible(self._round_delay_seconds())
+            else:
+                self._sleep_interruptible(self._account_delay_seconds())
 
         print("Post-login command runner loop stopped")
 
@@ -480,10 +515,10 @@ class PostLoginCommandRunner:
                 print(
                     "Post-login command step - "
                     f"account={index + 1} - pid={pid} - name={page_name!r} - "
-                    "stage=BACKGROUND_TEST_ONLY"
+                    "stage=CURRENT_ACCOUNT_BACKGROUND_TEST_ONLY"
                 )
                 self._set_status(
-                    f"اختبار أوامر الدخول: الحساب {index + 1} جاهز في الخلفية"
+                    f"اختبار أوامر الدخول: فحص الحساب {index + 1} في الخلفية فقط"
                 )
                 self._sleep_interruptible(self._test_hold_seconds())
                 return "OK"
@@ -498,8 +533,8 @@ class PostLoginCommandRunner:
                     return reason
 
                 # Real command modules will be called here one by one.
-                # The foreground activation above must stay immediately before
-                # the actual command execution, not as a separate scan.
+                # Foreground activation happens only for the current account
+                # immediately before executing its real command.
                 print(
                     "Post-login command step - "
                     f"account={index + 1} - pid={pid} - name={page_name!r} - "
