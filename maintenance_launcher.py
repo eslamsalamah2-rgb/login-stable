@@ -58,6 +58,91 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
         return True
 
+    def _current_launcher_pid(self):
+        try:
+            if self.launcher.process is None:
+                return None
+            if self.launcher.process.poll() is not None:
+                return None
+            return self.launcher.process.pid
+        except Exception:
+            return None
+
+    def _stop_launcher_only(self):
+        try:
+            process = self.launcher.process
+            if process is not None and process.poll() is None:
+                process.terminate()
+        except Exception:
+            pass
+
+    def _open_conquer_pid_with_retries(self, path, account_number, total_accounts):
+        """Open launcher, click Start Game, and confirm a new conquer.exe PID.
+
+        Sometimes the launcher button is visibly clicked but no Conquer page is
+        created. In that case we reopen the launcher and retry instead of
+        leaving the account stuck after "Start Game clicked".
+        """
+        max_attempts = 3
+
+        for attempt in range(1, max_attempts + 1):
+            previous_conquer_pids = ConquerMemoryReader.list_conquer_pids()
+
+            self.set_status(
+                f"الحساب {account_number}/{total_accounts}: فتح اللانشر "
+                f"محاولة {attempt}/{max_attempts}..."
+            )
+
+            success, message = self.launcher.open(path)
+            if not success:
+                return None, "OPEN_ERROR"
+
+            time.sleep(0.8)
+
+            launcher_pid = self._current_launcher_pid()
+
+            self.set_status(
+                f"الحساب {account_number}/{total_accounts}: البحث عن Start Game "
+                f"محاولة {attempt}/{max_attempts}..."
+            )
+
+            found = self.start_game_task.start(
+                target_pid=launcher_pid,
+                timeout=20.0,
+            )
+
+            if not found:
+                print(
+                    f"Start Game attempt {attempt}/{max_attempts} failed - "
+                    "button not found"
+                )
+                self._stop_launcher_only()
+                time.sleep(1.0)
+                continue
+
+            self.set_status(
+                f"الحساب {account_number}/{total_accounts}: انتظار صفحة Conquer "
+                f"الجديدة محاولة {attempt}/{max_attempts}..."
+            )
+
+            conquer_pid = ConquerMemoryReader.wait_for_new_conquer_pid(
+                previous_conquer_pids,
+                timeout=20.0,
+                launcher_pid=launcher_pid,
+            )
+
+            if conquer_pid is not None:
+                return conquer_pid, "SUCCESS"
+
+            print(
+                f"Start Game attempt {attempt}/{max_attempts} clicked but no "
+                "new Conquer PID appeared - retrying with a fresh launcher"
+            )
+            self._stop_launcher_only()
+            time.sleep(1.0)
+
+        return None, "CONQUER_PID_ERROR"
+
     def process_accounts(self):
         path = self.path_entry.get().strip()
         accounts = list(self.accounts_data)
@@ -170,38 +255,16 @@ class MaintenanceAwareLauncher(SimpleLauncher):
         self.set_status(f"تم الانتهاء من {total_accounts} حساب")
 
     def run_account(self, path, username, password, account_number, total_accounts):
-        page_started_at = time.time()
-        previous_conquer_pids = ConquerMemoryReader.list_conquer_pids()
-
-        self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري فتح صفحة جديدة..."
-        )
-
-        success, message = self.launcher.open(path)
-
-        if not success:
-            return "OPEN_ERROR", None
-
-        self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري البحث عن Start Game..."
-        )
-
-        found = self.start_game_task.start()
-
-        if not found:
-            return "START_GAME_ERROR", None
-
-        self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري تحديد conquer.exe الجديد..."
-        )
-
-        conquer_pid = ConquerMemoryReader.wait_for_new_conquer_pid(
-            previous_conquer_pids,
-            timeout=20.0
+        conquer_pid, launch_result = self._open_conquer_pid_with_retries(
+            path=path,
+            account_number=account_number,
+            total_accounts=total_accounts,
         )
 
         if conquer_pid is None:
-            return "CONQUER_PID_ERROR", None
+            return launch_result, None
+
+        page_started_at = time.time()
 
         try:
             memory_reader = ConquerMemoryReader(conquer_pid)
@@ -226,7 +289,8 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
         login_done = self.login_task.start(
             username=username,
-            password=password
+            password=password,
+            target_pid=conquer_pid,
         )
 
         if not login_done:
@@ -237,7 +301,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
             f"الحساب {account_number}/{total_accounts}: جاري الضغط على Log In..."
         )
 
-        if not self.login_button_task.start():
+        if not self.login_button_task.start(target_pid=conquer_pid):
             memory_reader.close()
             return "LOGIN_BUTTON_ERROR", None
 
@@ -259,7 +323,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
             self.post_login_task.press_ok()
             time.sleep(0.7)
 
-            if not self.login_button_task.start():
+            if not self.login_button_task.start(target_pid=conquer_pid):
                 memory_reader.close()
                 return "LOGIN_BUTTON_ERROR", None
 
@@ -285,7 +349,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 memory_reader.close()
                 return "PASSWORD_RETRY_ERROR", None
 
-            if not self.login_button_task.start():
+            if not self.login_button_task.start(target_pid=conquer_pid):
                 memory_reader.close()
                 return "LOGIN_BUTTON_ERROR", None
 
@@ -308,7 +372,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 self.post_login_task.press_ok()
                 time.sleep(0.7)
 
-                if not self.login_button_task.start():
+                if not self.login_button_task.start(target_pid=conquer_pid):
                     memory_reader.close()
                     return "LOGIN_BUTTON_ERROR", None
 
@@ -348,7 +412,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 )
                 time.sleep(10.0)
 
-                if not self.login_button_task.start():
+                if not self.login_button_task.start(target_pid=conquer_pid):
                     memory_reader.close()
                     return "LOGIN_BUTTON_ERROR", None
 
