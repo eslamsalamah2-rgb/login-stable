@@ -2,20 +2,33 @@ import threading
 import time
 
 from tasks.input_lock import AutomationInputLock
+from tasks.login_priority_gate import LoginPriorityGate
 from tasks.memory_reader import ConquerMemoryReader
 
 
 class PostLoginCommandRunner:
     """Runs post-login commands after selected accounts become READY.
 
-    Stage 1 is an orchestration/safety layer only.
-    Test Mode runs continuously in the background, but it checks only the
-    account whose turn would be executed next. Real command modules must
-    foreground only that same account immediately before the actual command.
+    Login/Health is the controller. This runner is only a worker.
+
+    Startup rule:
+        all selected accounts must be READY before stage two starts.
+
+    Loop rule:
+        after stage two starts, check only the account whose turn is next.
+        If that account is not READY, stay on it and let Login/Health recover it.
+        Do not advance to the next account until the current account is READY.
+
+    Test Mode:
+        background only, no foreground activation, no mouse/keyboard input.
+
+    Real command mode:
+        foreground only the current account immediately before the actual command.
     """
 
     def __init__(self, launcher):
         self.launcher = launcher
+        self.gate = LoginPriorityGate(launcher)
         self.stop_event = threading.Event()
         self.thread = None
         self.cycle_count = 0
@@ -67,7 +80,6 @@ class PostLoginCommandRunner:
         return self._feature_enabled("post_login_debug_only", True)
 
     def _has_enabled_work_module(self):
-        """True only when a real post-login command module is enabled."""
         return any(
             self._feature_enabled(key, False)
             for key in (
@@ -126,19 +138,21 @@ class PostLoginCommandRunner:
             self._set_status("أوامر الدخول: لا توجد مهمة فعلية مفعلة")
             return False
 
-        # First entry into stage 2 still requires all selected accounts to be READY.
-        ok, ready_indices, problem_index, problem_reason = self._selected_ready_state()
-        if not ok:
-            self._log_waiting(problem_index, problem_reason, reason)
+        start_gate = self.gate.all_selected_ready()
+        if not start_gate.ok:
+            self._log_waiting(start_gate.account_index, start_gate.reason, reason)
             return False
 
         with self.lock:
             if self.is_running():
                 return True
 
-            self.next_position = 0
-            self.problem_key = None
-            self.problem_started_at = None
+            selected = self.gate.selected_indices()
+            if selected and self.current_index in selected:
+                self.next_position = selected.index(self.current_index)
+            else:
+                self.next_position = 0
+
             self.stop_event.clear()
             self.thread = threading.Thread(
                 target=self._run_loop,
@@ -150,10 +164,10 @@ class PostLoginCommandRunner:
         mode = "CURRENT_ACCOUNT_BACKGROUND_TEST" if self._debug_only() else "COMMAND_LOOP"
         print(
             "Post-login commands started - "
-            f"reason={reason} - mode={mode} - accounts={[i + 1 for i in ready_indices]}"
+            f"reason={reason} - mode={mode} - accounts={[i + 1 for i in start_gate.ready_indices]}"
         )
         self._set_status(
-            f"أوامر الدخول بدأت - {len(ready_indices)} حساب جاهز"
+            f"أوامر الدخول بدأت - {len(start_gate.ready_indices)} حساب جاهز"
         )
         return True
 
@@ -163,134 +177,7 @@ class PostLoginCommandRunner:
         self._set_status("أوامر الدخول متوقفة")
 
     def pause_for_login_priority(self, reason="login_priority"):
-        # The loop is cooperative. It will see Login/Recovery activity and wait.
         print(f"Post-login commands yielding to Login/Health - reason={reason}")
-
-    # ------------------------------------------------------------------
-    # Readiness checks
-    # ------------------------------------------------------------------
-
-    def _selected_indices(self):
-        try:
-            if hasattr(self.launcher, "_selected_indices"):
-                return list(self.launcher._selected_indices())
-        except Exception:
-            pass
-
-        try:
-            return sorted(int(i) for i in self.launcher.active_sessions.keys())
-        except Exception:
-            return []
-
-    def _account_is_recovering(self, index):
-        try:
-            with self.launcher.recovering_accounts_lock:
-                return index in self.launcher.recovering_accounts
-        except Exception:
-            return False
-
-    def _any_account_recovering(self):
-        try:
-            with self.launcher.recovering_accounts_lock:
-                return bool(self.launcher.recovering_accounts)
-        except Exception:
-            return False
-
-    def _login_priority_active(self):
-        if getattr(self.launcher, "is_running", False):
-            return True, "LOGIN_SEQUENCE_RUNNING"
-
-        if self._any_account_recovering():
-            return True, "RECOVERY_RUNNING"
-
-        return False, ""
-
-    def _read_health(self, pid):
-        try:
-            if hasattr(self.launcher, "_read_health"):
-                return self.launcher._read_health(pid)
-        except Exception as error:
-            print(f"Post-login health read failed via launcher - PID {pid}: {error}")
-
-        reader = None
-        try:
-            reader = ConquerMemoryReader(pid)
-            return reader.read_name() or "", reader.read_state()
-        except Exception as error:
-            print(f"Post-login health read failed - PID {pid}: {error}")
-            return None, None
-        finally:
-            if reader is not None:
-                try:
-                    reader.close()
-                except Exception:
-                    pass
-
-    def _is_ready_for_commands(self, index):
-        if self.launcher.is_running:
-            return False, "LOGIN_SEQUENCE_RUNNING"
-
-        if self._account_is_recovering(index):
-            return False, "RECOVERING"
-
-        session = self.launcher.active_sessions.get(index)
-        if not session:
-            return False, "NO_SESSION"
-
-        pid = session.get("pid")
-        if not pid:
-            return False, "NO_PID"
-
-        live_pids = set(ConquerMemoryReader.list_conquer_pids())
-        if pid not in live_pids:
-            return False, "PID_MISSING"
-
-        try:
-            detector = getattr(self.launcher, "window_disconnect_detector", None)
-            if detector is not None and detector.has_disconnect_dialog(pid):
-                return False, "DISCONNECTED_DIALOG"
-        except Exception as error:
-            print(f"Post-login disconnect check failed - account {index + 1}: {error}")
-
-        current_name, current_state = self._read_health(pid)
-        if current_name is None or current_state is None:
-            return False, "MEMORY_READ_FAILED"
-
-        expected_name = session.get("page_name", "")
-        if not expected_name and 0 <= index < len(self.launcher.accounts_data):
-            expected_name = self.launcher.accounts_data[index].get("character_name", "")
-
-        if expected_name and current_name != expected_name:
-            return False, f"NAME_MISMATCH({current_name!r}!={expected_name!r})"
-
-        healthy_state = session.get("healthy_state")
-        if healthy_state is None:
-            return False, "BASELINE_PENDING"
-
-        try:
-            if hasattr(self.launcher, "_state_requires_timer") and self.launcher._state_requires_timer(current_state):
-                return False, f"TIMER_REQUIRED_FOR_STATE({current_state})"
-        except Exception:
-            pass
-
-        if current_state != healthy_state:
-            return False, f"STATE_MISMATCH({current_state}!={healthy_state})"
-
-        return True, "READY"
-
-    def _selected_ready_state(self):
-        selected = self._selected_indices()
-        if not selected:
-            return False, [], None, "NO_SELECTED_ACCOUNTS"
-
-        ready = []
-        for index in selected:
-            ok, reason = self._is_ready_for_commands(index)
-            if not ok:
-                return False, ready, index, reason
-            ready.append(index)
-
-        return True, ready, None, "READY"
 
     # ------------------------------------------------------------------
     # Recovery timeout bridge
@@ -321,11 +208,11 @@ class PostLoginCommandRunner:
             self.problem_key = key
             self.problem_started_at = now
             print(
-                "Post-login commands paused at current account - "
+                "Post-login commands paused for Login/Health - "
                 f"account={problem_index + 1} - reason={problem_reason}"
             )
             self._set_status(
-                f"أوامر الدخول واقفة عند الحساب {problem_index + 1}: {problem_reason}"
+                f"أوامر الدخول متوقفة مؤقتًا - الحساب {problem_index + 1}: {problem_reason}"
             )
             return
 
@@ -339,7 +226,11 @@ class PostLoginCommandRunner:
         self._force_replace_problem_account(problem_index, problem_reason, elapsed)
 
     def _force_replace_problem_account(self, index, reason, elapsed):
-        if self.launcher.is_running or self._account_is_recovering(index):
+        priority_active, priority_reason = self.gate.login_priority_active()
+        if priority_active and priority_reason != "USER_PAUSE_REQUESTED":
+            return
+
+        if self.gate.account_is_recovering(index):
             return
 
         session = dict(self.launcher.active_sessions.get(index) or {})
@@ -348,7 +239,7 @@ class PostLoginCommandRunner:
 
         pid = session.get("pid")
         print(
-            "Post-login recovery timeout - closing/reopening account - "
+            "Post-login recovery timeout - closing/reopening current account - "
             f"account={index + 1} - pid={pid} - reason={reason} - elapsed={elapsed:.1f}s"
         )
         self._set_status(
@@ -393,13 +284,13 @@ class PostLoginCommandRunner:
         print("Post-login command runner loop active")
 
         while not self.stop_event.is_set():
-            priority_active, priority_reason = self._login_priority_active()
+            priority_active, priority_reason = self.gate.login_priority_active()
             if priority_active:
                 self._log_waiting(None, priority_reason, "login_priority")
                 self._sleep_interruptible(0.5)
                 continue
 
-            selected = self._selected_indices()
+            selected = self.gate.selected_indices()
             if not selected:
                 self._log_waiting(None, "NO_SELECTED_ACCOUNTS", "loop")
                 self._sleep_interruptible(1.0)
@@ -411,10 +302,10 @@ class PostLoginCommandRunner:
             index = selected[self.next_position]
             self.current_index = index
 
-            ok, reason = self._is_ready_for_commands(index)
-            if not ok:
-                self._log_waiting(index, reason, "current_account")
-                self._track_problem_or_recover(index, reason)
+            current_gate = self.gate.account_ready(index)
+            if not current_gate.ok:
+                self._log_waiting(index, current_gate.reason, "current_account")
+                self._track_problem_or_recover(index, current_gate.reason)
                 self._sleep_interruptible(1.0)
                 continue
 
@@ -508,9 +399,9 @@ class PostLoginCommandRunner:
 
         try:
             if self._debug_only():
-                ok, reason = self._is_ready_for_commands(index)
-                if not ok:
-                    return reason
+                current_gate = self.gate.account_ready(index)
+                if not current_gate.ok:
+                    return current_gate.reason
 
                 print(
                     "Post-login command step - "
@@ -528,9 +419,9 @@ class PostLoginCommandRunner:
                 if not activated:
                     return activate_reason
 
-                ok, reason = self._is_ready_for_commands(index)
-                if not ok:
-                    return reason
+                current_gate = self.gate.account_ready(index)
+                if not current_gate.ok:
+                    return current_gate.reason
 
                 # Real command modules will be called here one by one.
                 # Foreground activation happens only for the current account
