@@ -4,6 +4,7 @@ import password_error_policy_patch  # restarts all pages after repeated wrong-pa
 import existing_pages_settings_patch  # adds Scan Open, side panel, and editable Settings
 import pre_merge_safety_patch  # logging, backups, input lock, feature flags, rollback prep
 import post_login_commands_patch  # starts safe post-login command loop after READY accounts
+import post_login_module_merge_patch  # safe modular worker hook for future Drop/Use/Sash merge
 from selection_launcher import SelectionAwareLauncher
 
 
