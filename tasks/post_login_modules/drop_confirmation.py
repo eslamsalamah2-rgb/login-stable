@@ -24,19 +24,20 @@ DEFAULT_YES_TEMPLATE_PATHS = (
 
 CONFIRM_MATCH_SCALES = (0.94, 0.97, 1.00, 1.03, 1.06)
 
-# Tight Drop confirmation search area.
-# The inventory/grid box is passed from the Drop worker. Search only a small
-# padded area around that box; never search the whole game window for Drop Yes.
-BAG_ROI_PAD_LEFT = 90
-BAG_ROI_PAD_TOP = 130
-BAG_ROI_PAD_RIGHT = 90
-BAG_ROI_PAD_BOTTOM = 130
+# Safe Drop confirmation search area.
+# The Drop worker passes the inventory/grid box. We allow a little more space
+# around the bag than the previous ultra-tight version, but still never scan the
+# full game window. This keeps far Yes/No buttons out of range.
+BAG_ROI_PAD_LEFT = 130
+BAG_ROI_PAD_TOP = 185
+BAG_ROI_PAD_RIGHT = 165
+BAG_ROI_PAD_BOTTOM = 185
 NO_BAG_FALLBACK_RIGHT_FRACTION = 0.72
 
 # When the matched template is wide or named yes_no, it may contain both Yes and
-# No. Clicking the center can land on No. This fraction clicks inside the left
-# side where the Yes button normally is.
-WIDE_TEMPLATE_YES_CLICK_X_FRACTION = 0.28
+# No. The previous left-side guard could land on No on this client layout, so the
+# fallback click is now deliberately on the right-side button area.
+WIDE_TEMPLATE_YES_CLICK_X_FRACTION = 0.72
 WIDE_TEMPLATE_MIN_WIDTH = 70
 
 
@@ -98,7 +99,7 @@ def load_yes_templates(paths_text=None):
         return []
 
     # Prefer Yes-only crops. yes_no.png is only a fallback because it can contain
-    # both buttons and is easier to click wrong if used as the main template.
+    # both buttons and needs a guarded click point.
     yes_only = [(path, image) for path, image in loaded if not _is_yes_no_template_path(path)]
     if yes_only:
         return yes_only
@@ -162,11 +163,10 @@ def _candidate_regions(image, around_box=None):
     """Return safe ROIs for the Drop confirmation Yes search.
 
     Normal Drop flow passes the inventory/grid box as around_box. In that case
-    we scan only a tight padded box around the bag. Missing Yes is safer than
-    clicking a wrong Yes/No somewhere else.
+    we scan only a padded area around the bag. Missing Yes is safer than clicking
+    a wrong Yes/No somewhere else, so there is no full-window fallback.
     """
     width, height = image.size
-    regions = []
 
     if around_box is not None:
         try:
@@ -178,20 +178,17 @@ def _candidate_regions(image, around_box=None):
                 min(height, y2 + BAG_ROI_PAD_BOTTOM),
             )
             if roi[2] - roi[0] >= 30 and roi[3] - roi[1] >= 20:
-                return [("tight_inventory_bag_yes_area", roi)]
+                return [("safe_inventory_bag_yes_area", roi)]
         except Exception:
             pass
 
         print("Drop confirm YES skipped - inventory bag box missing/invalid; refusing wide search")
         return []
 
-    # Emergency fallback only if caller did not pass the bag box. This is still
-    # right-side only and never full-window.
-    fallback_roi = (int(width * NO_BAG_FALLBACK_RIGHT_FRACTION), 0, width, height)
-    if fallback_roi[2] - fallback_roi[0] >= 30 and fallback_roi[3] - fallback_roi[1] >= 20:
-        regions.append(("right_inventory_fallback_yes_area", fallback_roi))
-
-    return regions
+    # If the caller failed to pass the bag box, do not guess. A missed Yes is
+    # safe; a wrong Yes/No click can break the page.
+    print("Drop confirm YES skipped - no inventory bag box; refusing fallback search")
+    return []
 
 
 def _best_match_in_region(image, template, roi, stop_check=None):
@@ -234,12 +231,12 @@ def _best_match_in_region(image, template, roi, stop_check=None):
 def _click_point_for_yes_match(path, x, y, width, height):
     """Return the click point for a matched Drop confirmation template.
 
-    Yes-only crops click center. Wide/yes_no crops click left-side to avoid No.
+    Yes-only crops click center. Wide/yes_no crops click right-side to avoid No.
     """
-    use_left_guard = _is_yes_no_template_path(path) or int(width) >= WIDE_TEMPLATE_MIN_WIDTH
-    if use_left_guard:
+    use_right_guard = _is_yes_no_template_path(path) or int(width) >= WIDE_TEMPLATE_MIN_WIDTH
+    if use_right_guard:
         click_x = int(x + width * WIDE_TEMPLATE_YES_CLICK_X_FRACTION)
-        rule = "yes_left_guard"
+        rule = "yes_right_guard"
     else:
         click_x = int(x + width / 2)
         rule = "yes_center"
@@ -274,7 +271,7 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around
                     best = (score, candidate_hwnd, path, x, y, width, height, region_name)
 
     if best is None:
-        print("Drop confirm YES not found - no match candidates in tight inventory/bag area")
+        print("Drop confirm YES not found - no match candidates in safe inventory/bag area")
         return None
 
     score, match_hwnd, path, x, y, width, height, region_name = best
