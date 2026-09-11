@@ -42,6 +42,7 @@ import login_username_arrow_patch
 
 # Language polish.
 import settings_language_details_patch
+import drop_yes_settings_patch
 import remaining_labels_language_patch
 import language_buttons_fixed_english_patch
 
