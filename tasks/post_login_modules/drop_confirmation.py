@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import pydirectinput
 import win32api
+import win32con
 import win32gui
 import win32process
 from PIL import Image
@@ -16,6 +17,7 @@ from PIL import Image
 from tasks.post_login_modules.window_capture import capture_window
 
 
+# نفس فكرة البرنامج القديم: مفيش PAUSE عام، وحركة الماوس مباشرة.
 pydirectinput.PAUSE = 0
 pydirectinput.FAILSAFE = False
 
@@ -26,39 +28,41 @@ DEFAULT_YES_TEMPLATE_PATHS = (
     os.path.join("assets", "drop_yes.png"),
 )
 
-# Embedded fallback from the Yes crop sent during the drop test.
-# External files above are still preferred, but the drop confirmation no longer
-# fails just because the user has not copied assets/drop_confirm_yes.png yet.
+# نسخة مدمجة من صورة Yes التي أرسلها المستخدم.
+# الملفات الخارجية أعلاه ما زالت لها أولوية، لكن لو مش موجودة نستخدم دي.
 FALLBACK_YES_BASE64 = (
-    "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"
+    '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'
+    'xnhAAAAAElFTkSuQmCC'
 )
 
-CONFIRM_MATCH_SCALES = (1.00,)
-BAG_ROI_PAD_LEFT = 80
-BAG_ROI_PAD_TOP = 140
-BAG_ROI_PAD_RIGHT = 220
-BAG_ROI_PAD_BOTTOM = 120
+# رجعنا الـ multi-scale لأن بعد التسريع 1.00 فقط ممكن يفوّت زر Yes.
+CONFIRM_MATCH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
+
+# صندوق البحث حوالين الشنطة. وسعناه لأن نافذة Yes بتطلع جنب الشنطة مش في مكان ثابت.
+BAG_ROI_PAD_LEFT = 260
+BAG_ROI_PAD_TOP = 240
+BAG_ROI_PAD_RIGHT = 320
+BAG_ROI_PAD_BOTTOM = 220
 
 
 @dataclass
@@ -188,18 +192,17 @@ def _candidate_regions(image, around_box=None):
                 min(height, y2 + BAG_ROI_PAD_BOTTOM),
             )
             if roi[2] - roi[0] >= 30 and roi[3] - roi[1] >= 20:
-                regions.append(("around_bag", roi))
+                regions.append(("around_bag_wide", roi))
         except Exception:
             pass
 
-    # Small right-side fallback. Full-window scan is intentionally avoided for
-    # speed during repeated drop confirmation.
-    right_roi = (int(width * 0.45), 0, width, height)
+    # احتياطي سريع: يمين الشاشة فقط، لأن Popup الدروب بيطلع حوالين الشنطة.
+    right_roi = (int(width * 0.35), 0, width, height)
     if right_roi[2] - right_roi[0] >= 30:
         regions.append(("right_side", right_roi))
 
-    if not regions:
-        regions.append(("full_window", (0, 0, width, height)))
+    # Full window كآخر حل فقط. وجوده لا يبطئ غالبًا لأن زر Yes صغير والـ timeout قصير.
+    regions.append(("full_window", (0, 0, width, height)))
 
     unique = []
     seen = set()
@@ -218,8 +221,9 @@ def _best_match_in_region(image, template_image, roi, stop_check=None):
     left, top, right, bottom = roi
     crop = image.crop((left, top, right, bottom)).convert("RGB")
     source = _pil_to_bgr(crop)
+    src_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+
     template = _pil_to_bgr(template_image)
-    src_h, src_w = source.shape[:2]
     tmp_h, tmp_w = template.shape[:2]
 
     best = None
@@ -229,14 +233,25 @@ def _best_match_in_region(image, template_image, roi, stop_check=None):
 
         width = int(round(tmp_w * float(scale)))
         height = int(round(tmp_h * float(scale)))
-        if width < 4 or height < 4 or width > src_w or height > src_h:
+        if width < 4 or height < 4 or width > source.shape[1] or height > source.shape[0]:
             continue
 
         try:
             resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
+
             color_result = cv2.matchTemplate(source, resized, cv2.TM_CCOEFF_NORMED)
-            _, score, _, loc = cv2.minMaxLoc(color_result)
-            score = float(score)
+            _, color_score, _, color_loc = cv2.minMaxLoc(color_result)
+
+            tmp_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+            gray_result = cv2.matchTemplate(src_gray, tmp_gray, cv2.TM_CCOEFF_NORMED)
+            _, gray_score, _, gray_loc = cv2.minMaxLoc(gray_result)
+
+            if gray_score > color_score:
+                score = float(gray_score)
+                loc = gray_loc
+            else:
+                score = float(color_score)
+                loc = color_loc
         except Exception:
             continue
 
@@ -246,7 +261,7 @@ def _best_match_in_region(image, template_image, roi, stop_check=None):
     return best
 
 
-def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around_box=None, stop_check=None):
+def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around_box=None, stop_check=None):
     if stop_check and stop_check():
         return None
 
@@ -268,10 +283,12 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around
         for region_name, roi in _candidate_regions(image, local_around_box):
             if stop_check and stop_check():
                 return None
+
             for path, template in templates:
                 match = _best_match_in_region(image, template, roi, stop_check=stop_check)
                 if match is None:
                     continue
+
                 score, x, y, width, height = match
                 if best is None or score > best[0]:
                     best = (score, candidate_hwnd, path, x, y, width, height, region_name)
@@ -305,16 +322,36 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around
     )
 
 
+def _instant_left_click(x, y):
+    x = int(x)
+    y = int(y)
+    win32api.SetCursorPos((x, y))
+    time.sleep(0.01)
+
+    # pydirectinput مع إحداثيات مباشرة أثبت من click() بدون إحداثيات.
+    try:
+        pydirectinput.click(x, y)
+        return
+    except Exception:
+        pass
+
+    # احتياطي Win32 مباشر.
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
+    time.sleep(0.01)
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
+
+
 def click_drop_yes_if_visible(
     pid,
     hwnd=None,
-    timeout=0.45,
-    threshold=0.78,
+    timeout=1.20,
+    threshold=0.72,
     paths_text=None,
     around_box=None,
     stop_check=None,
 ):
     start = time.perf_counter()
+
     while time.perf_counter() - start < float(timeout):
         if stop_check and stop_check():
             print("Drop confirm YES stopped by user")
@@ -336,14 +373,12 @@ def click_drop_yes_if_visible(
             )
             if stop_check and stop_check():
                 return False
-            try:
-                win32api.SetCursorPos((match.center_screen[0], match.center_screen[1]))
-            except Exception:
-                pydirectinput.moveTo(match.center_screen[0], match.center_screen[1], duration=0)
-            pydirectinput.click()
+
+            _instant_left_click(match.center_screen[0], match.center_screen[1])
+            time.sleep(0.05)
             return True
 
-        time.sleep(0.03)
+        time.sleep(0.04)
 
     print("Drop confirm YES timeout")
     return False
