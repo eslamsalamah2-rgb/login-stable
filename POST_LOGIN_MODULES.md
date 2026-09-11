@@ -59,11 +59,10 @@ tasks/post_login_modules/inventory_ensure_open.py
 
 Purpose:
 
-- detects whether the bag is open using the manual image anchor
-- preferred anchor file: `assets/inventory_open.png`
-- if the bag image is not found, presses the configured inventory hotkey
-- verifies again after pressing the hotkey
-- does not click items, drop, or use anything
+- checks whether the bag is open by matching `assets/inventory_open.png`
+- if the image anchor is missing, it presses the configured bag hotkey
+- verifies the bag again after pressing
+- does not drop or use items
 
 Settings:
 
@@ -72,7 +71,6 @@ enable_inventory_ensure_open = true
 inventory_open_hotkey = i
 inventory_open_attempts = 2
 inventory_open_wait_seconds = 0.80
-inventory_open_strict = false
 ```
 
 ### InventoryGridProbeModule
@@ -86,9 +84,7 @@ tasks/post_login_modules/inventory_grid_probe.py
 Purpose:
 
 - captures the exact current account window by PID
-- detects the open bag by image anchor first
-- computes the 5 columns x 8 rows slot grid from the detected bag position
-- fallback: dynamic line-grid detector if the image anchor is not found
+- finds the open bag using the image anchor, then calculates the 5x8 slot grid
 - saves an annotated debug image with boxes around the 40 slots
 - gives a rough filled/empty count for logging
 - does not click
@@ -114,10 +110,10 @@ tasks/post_login_modules/inventory_item_probe.py
 Purpose:
 
 - reads PNG/JPG item templates from `assets/drop_items`
-- compares every detected bag slot against those item templates
-- logs matched item names, slot numbers, rows, columns, and scores
-- saves an annotated debug image showing matched slots
-- probe-only: no clicking, no dropping, no using items
+- compares each visible bag slot against the templates
+- logs matching item names, slots, and scores
+- saves a debug image with item labels
+- does not click, drop, or use items
 
 Settings:
 
@@ -125,30 +121,58 @@ Settings:
 enable_inventory_item_probe = true
 inventory_item_templates_dir = assets/drop_items
 inventory_item_match_threshold = 0.72
-inventory_item_probe_save_debug_image = true
 inventory_item_probe_debug_dir = logs/inventory_item_probe
 ```
 
-Expected item template folder:
+### InventoryDropWorkerModule
+
+File:
 
 ```text
-assets/drop_items
+tasks/post_login_modules/inventory_drop_worker.py
 ```
 
-Expected item probe log lines:
+Purpose:
+
+- first limited real Drop stage
+- uses only item templates from `assets/drop_items`
+- drops one matched item per account per cycle by default
+- saves a before/after debug image
+- runs only after the current account passes `LoginPriorityGate`
+- runs while the runner owns `AutomationInputLock`
+
+Settings:
 
 ```text
-Inventory item probe OK
-Inventory item match
-Inventory item probe debug image saved
+enable_inventory_drop_worker = true
+inventory_drop_templates_dir = assets/drop_items
+inventory_drop_match_threshold = 0.78
+inventory_drop_max_items_per_account = 1
+inventory_drop_clicks_per_point = 2
+inventory_drop_target_x_fraction = 0.50
+inventory_drop_target_y_fraction = 0.45
+inventory_drop_debug_dir = logs/inventory_drop_worker
+```
+
+Expected debug folder:
+
+```text
+logs/inventory_drop_worker
+```
+
+Expected log lines:
+
+```text
+Inventory drop executing
+Inventory drop worker OK
 ```
 
 ## Next intended modules
 
-1. Confirm Item Probe recognizes the intended item templates correctly.
-2. Add a decision layer: Drop / Use / Ignore.
-3. Safe Drop worker for one item, one account, one cycle.
-4. Expand Drop worker to all selected accounts.
-5. Sash worker.
+1. Test the limited Drop stage with one matched item per account.
+2. If the click style is correct, increase the drop count gradually.
+3. Add popup/confirmation handling if the game shows a confirmation after a drop.
+4. Add Use-item worker.
+5. Add Sash worker.
 
 Each one should be added and tested separately.
