@@ -1,6 +1,22 @@
+# private/runtime data
 credentials.json
 accounts.json
+settings.json
+item_selections.json
+
+# logs and backups
 logs/
 backups/
+
+# Python/build output
 __pycache__/
 *.pyc
+build/
+dist/
+*.spec
+
+# local editor/system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
