@@ -20,6 +20,7 @@ import settings_onoff_close_patch
 import top_header_controls_patch
 import startup_scan_visible_patch
 import hide_bottom_start_stop_patch
+import restore_scan_panel_bottom_patch
 import input_speed_patch
 import login_input_settings_patch
 import login_username_arrow_patch
