@@ -26,6 +26,7 @@ import input_speed_patch
 import login_input_settings_patch
 import login_username_arrow_patch
 import settings_language_details_patch
+import remaining_labels_language_patch
 import login_stability_patch
 import invalid_account_id_wait_patch
 import account_retry_limit_patch
