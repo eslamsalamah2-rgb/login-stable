@@ -1,6 +1,6 @@
 # Post-Login Modules
 
-This is the controlled merge area for code inspired by `google2`.
+This is the controlled merge area for ideas inspired by `google2`.
 
 We do not paste the old app into the Login Manager. Each feature must be added
 as a small module under:
@@ -61,7 +61,9 @@ Purpose:
 
 - second safe merge piece
 - captures the exact current account window by PID
-- locates the 5 columns x 8 rows inventory grid using the current calibrated layout
+- dynamically searches the captured image for the visible 5 columns x 8 rows inventory grid
+- does not depend on fixed 1920x1080 coordinates
+- works by detecting equally-spaced grid edges and scoring the best 5x8 candidate
 - saves an annotated debug image with boxes around the 40 slots
 - gives a rough filled/empty count for logging
 - does not click
@@ -91,7 +93,7 @@ Inventory grid probe debug image saved
 
 ## Next intended modules
 
-1. Confirm InventoryGridProbe boxes match the real slots on the user's screen.
+1. Confirm InventoryGridProbe boxes match the real slots on different screen sizes.
 2. Item image matcher for selected Drop items.
 3. Safe Drop worker.
 4. Use-item worker.
