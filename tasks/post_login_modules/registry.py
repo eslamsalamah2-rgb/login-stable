@@ -1,9 +1,11 @@
 from tasks.post_login_modules.inventory_probe import InventoryProbeModule
+from tasks.post_login_modules.inventory_ensure_open import InventoryEnsureOpenModule
 from tasks.post_login_modules.inventory_grid_probe import InventoryGridProbeModule
 
 
 MODULE_CLASSES = (
     InventoryProbeModule,
+    InventoryEnsureOpenModule,
     InventoryGridProbeModule,
 )
 
