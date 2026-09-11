@@ -12,7 +12,7 @@ import pydirectinput
 
 
 LOGIN_INPUT_PAUSE = 0.08
-LOGIN_TYPE_INTERVAL = 0.30
+LOGIN_TYPE_INTERVAL = 0.50
 DROP_INPUT_PAUSE = 0.0
 
 # Login-safe default after post-login modules are imported.
