@@ -44,6 +44,12 @@ def run_enabled_post_login_modules(launcher, account_index, session):
             result = module.run(account_index, session)
             if result == "SKIPPED":
                 continue
+            if result == "STOP_REQUESTED":
+                print(
+                    "Post-login module stopped by user - "
+                    f"module={module.name} - account={account_index + 1}"
+                )
+                return result
             if result != "OK":
                 print(
                     "Post-login module failed - "
