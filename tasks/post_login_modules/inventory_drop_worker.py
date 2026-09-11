@@ -3,6 +3,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
+import cv2
+import numpy as np
 import pydirectinput
 import win32gui
 from PIL import ImageDraw
@@ -14,11 +16,15 @@ from tasks.post_login_modules.inventory_grid_probe import (
 )
 from tasks.post_login_modules.inventory_item_probe import (
     DEFAULT_MATCH_THRESHOLD,
+    InventoryItemProbeResult,
+    SlotItemMatch,
     draw_item_debug,
     load_item_templates,
-    probe_items,
 )
 from tasks.post_login_modules.window_capture import capture_pid_window
+
+
+FAST_MATCH_SCALES = (0.95, 1.00, 1.05)
 
 
 @dataclass
@@ -30,15 +36,22 @@ class DropAction:
     target_screen: tuple[int, int]
 
 
-class InventoryDropWorkerModule:
-    """Drop only matched target items from the current account inventory.
+@dataclass
+class PreparedDropTemplate:
+    name: str
+    path: str
+    bgr: object
 
-    Important behavior:
+
+class InventoryDropWorkerModule:
+    """Drop only user-marked target items from the current account inventory.
+
+    Safe rescan logic:
       - scan the current bag
-      - choose one matched item only
+      - find the first matched item from assets/drop_items only
       - drop it
       - confirm Yes if needed
-      - scan again before choosing the next item
+      - rescan the bag from scratch before the next item
 
     This avoids using stale slot coordinates after the game reorders the bag.
     LoginPriorityGate and AutomationInputLock are owned by the runner before
@@ -114,10 +127,10 @@ class InventoryDropWorkerModule:
         return self._int_setting("inventory_drop_clicks_per_point", 2, minimum=1, maximum=3)
 
     def _click_delay(self):
-        return self._float_setting("inventory_drop_click_delay", 0.04, minimum=0.01, maximum=1.0)
+        return self._float_setting("inventory_drop_click_delay", 0.02, minimum=0.0, maximum=1.0)
 
     def _after_drop_delay(self):
-        return self._float_setting("inventory_drop_after_drop_delay", 0.05, minimum=0.0, maximum=1.0)
+        return self._float_setting("inventory_drop_after_drop_delay", 0.02, minimum=0.0, maximum=1.0)
 
     def _target_mode(self):
         return str(self._setting("inventory_drop_target_mode", "top_right") or "top_right").strip().lower()
@@ -128,8 +141,8 @@ class InventoryDropWorkerModule:
         return x, y
 
     def _target_margins(self):
-        x = self._int_setting("inventory_drop_target_margin_x", 2, minimum=1, maximum=300)
-        y = self._int_setting("inventory_drop_target_margin_y", 2, minimum=1, maximum=300)
+        x = self._int_setting("inventory_drop_target_margin_x", 1, minimum=1, maximum=300)
+        y = self._int_setting("inventory_drop_target_margin_y", 1, minimum=1, maximum=300)
         return x, y
 
     def _confirm_enabled(self):
@@ -142,7 +155,7 @@ class InventoryDropWorkerModule:
         return self._float_setting("inventory_drop_confirm_yes_threshold", 0.76, minimum=0.10, maximum=0.99)
 
     def _confirm_timeout(self):
-        return self._float_setting("inventory_drop_confirm_yes_timeout", 1.0, minimum=0.2, maximum=10.0)
+        return self._float_setting("inventory_drop_confirm_yes_timeout", 0.80, minimum=0.2, maximum=10.0)
 
     def _confirm_template_paths(self):
         value = self._setting("inventory_drop_confirm_yes_paths", "")
@@ -175,19 +188,36 @@ class InventoryDropWorkerModule:
         return int(left + point[0]), int(top + point[1])
 
     def _drop_target_screen(self, hwnd):
+        mode = self._target_mode()
+
+        if mode in {"top_right", "right_top", "upper_right"}:
+            margin_x, margin_y = self._target_margins()
+
+            # Prefer client-area coordinates so top-right means inside the game
+            # content, not the Windows title-bar close button.
+            try:
+                client_left, client_top, client_right, client_bottom = win32gui.GetClientRect(hwnd)
+                point = (
+                    max(client_left + 1, client_right - margin_x),
+                    min(client_bottom - 1, client_top + margin_y),
+                )
+                x, y = win32gui.ClientToScreen(hwnd, point)
+                return int(x), int(y)
+            except Exception:
+                pass
+
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            except Exception:
+                left, top, right, bottom = 0, 0, 1920, 1080
+            return int(right - margin_x), int(top + margin_y)
+
         try:
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
             width = max(1, right - left)
             height = max(1, bottom - top)
         except Exception:
             left, top, width, height = 0, 0, 1920, 1080
-            right = left + width
-            bottom = top + height
-
-        mode = self._target_mode()
-        if mode in {"top_right", "right_top", "upper_right"}:
-            margin_x, margin_y = self._target_margins()
-            return int(right - margin_x), int(top + margin_y)
 
         fx, fy = self._target_fraction()
         return int(left + width * fx), int(top + height * fy)
@@ -200,10 +230,13 @@ class InventoryDropWorkerModule:
     def _click_point(self, x, y, clicks):
         delay = self._click_delay()
         pydirectinput.moveTo(int(x), int(y))
-        time.sleep(delay)
+        if delay > 0:
+            time.sleep(delay)
+
         for _ in range(max(1, int(clicks))):
             pydirectinput.click(int(x), int(y))
-            time.sleep(delay)
+            if delay > 0:
+                time.sleep(delay)
 
     def _draw_drop_debug(self, image, grid, item_result, action=None):
         debug = draw_item_debug(image, grid, item_result)
@@ -218,6 +251,95 @@ class InventoryDropWorkerModule:
         except Exception:
             pass
         return debug
+
+    def _pil_to_bgr(self, image):
+        rgb = np.array(image.convert("RGB"))
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+    def _prepare_templates(self, templates):
+        prepared = []
+        for template in templates:
+            try:
+                prepared.append(
+                    PreparedDropTemplate(
+                        name=template.name,
+                        path=template.path,
+                        bgr=self._pil_to_bgr(template.image),
+                    )
+                )
+            except Exception as error:
+                print(f"Inventory drop template prepare failed: {template.path} - {error}")
+        return prepared
+
+    def _score_template(self, slot_bgr, prepared_template):
+        slot_h, slot_w = slot_bgr.shape[:2]
+        template = prepared_template.bgr
+        temp_h, temp_w = template.shape[:2]
+        best = -1.0
+
+        for scale in FAST_MATCH_SCALES:
+            width = int(round(temp_w * float(scale)))
+            height = int(round(temp_h * float(scale)))
+
+            if width < 4 or height < 4:
+                continue
+
+            if width > slot_w or height > slot_h:
+                if temp_w > slot_w * 1.30 or temp_h > slot_h * 1.30:
+                    continue
+                width = slot_w
+                height = slot_h
+
+            try:
+                resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
+                result = cv2.matchTemplate(slot_bgr, resized, cv2.TM_CCOEFF_NORMED)
+                _, score, _, _ = cv2.minMaxLoc(result)
+                score = float(score)
+                if np.isfinite(score) and score > best:
+                    best = score
+            except Exception:
+                continue
+
+        return best
+
+    def _first_matching_slot(self, image, grid, prepared_templates, threshold):
+        scanned = 0
+
+        for slot in grid.slots:
+            scanned += 1
+            crop = image.crop(slot.box).convert("RGB")
+            slot_bgr = self._pil_to_bgr(crop)
+
+            best_score = -1.0
+            best_template = None
+            for prepared in prepared_templates:
+                score = self._score_template(slot_bgr, prepared)
+                if score > best_score:
+                    best_score = score
+                    best_template = prepared
+
+            if best_template is not None and best_score >= threshold:
+                match = SlotItemMatch(
+                    slot_index=slot.index,
+                    row=slot.row,
+                    col=slot.col,
+                    box=slot.box,
+                    item_name=best_template.name,
+                    template_path=best_template.path,
+                    score=float(best_score),
+                )
+                item_result = InventoryItemProbeResult(
+                    matches=[match],
+                    template_count=len(prepared_templates),
+                    scanned_slots=scanned,
+                )
+                return item_result, match
+
+        return InventoryItemProbeResult(
+            matches=[],
+            template_count=len(prepared_templates),
+            scanned_slots=scanned,
+        ), None
 
     def _confirm_yes_if_needed(self, pid, hwnd, grid):
         if not self._confirm_enabled():
@@ -257,30 +379,33 @@ class InventoryDropWorkerModule:
         time.sleep(self._after_drop_delay())
         return self._confirm_yes_if_needed(pid, hwnd, grid)
 
-    def _scan_next_drop(self, pid, hwnd, templates):
-        image, current_hwnd = capture_pid_window(pid)
-        if image is None or not current_hwnd:
-            return None, current_hwnd, None, None
+    def _scan_next_drop(self, pid, prepared_templates):
+        image, hwnd = capture_pid_window(pid)
+        if image is None or not hwnd:
+            return None, hwnd, None, None, None
 
         grid = detect_inventory_grid(image)
         if grid is None:
-            return image, current_hwnd, None, None
+            return image, hwnd, None, None, None
 
-        item_result = probe_items(image, grid, templates, self._threshold())
-        if not item_result.matches:
-            return image, current_hwnd, grid, item_result
+        item_result, match = self._first_matching_slot(
+            image=image,
+            grid=grid,
+            prepared_templates=prepared_templates,
+            threshold=self._threshold(),
+        )
 
-        # Pick one current matched slot only. Do not prepare a list of future
-        # slots because the inventory compacts/reorders after every drop.
-        match = sorted(item_result.matches, key=lambda item: (item.slot_index, -item.score))[0]
+        if match is None:
+            return image, hwnd, grid, item_result, None
+
         action = DropAction(
             slot_index=match.slot_index,
             item_name=match.item_name,
             score=match.score,
-            slot_screen=self._slot_center_screen(current_hwnd, match.box),
-            target_screen=self._drop_target_screen(current_hwnd),
+            slot_screen=self._slot_center_screen(hwnd, match.box),
+            target_screen=self._drop_target_screen(hwnd),
         )
-        return image, current_hwnd, grid, (item_result, action)
+        return image, hwnd, grid, item_result, action
 
     def run(self, account_index, session):
         if not self.enabled():
@@ -297,23 +422,29 @@ class InventoryDropWorkerModule:
             print("Inventory drop skipped - no drop templates - " f"folder={templates_dir!r}")
             return "OK"
 
+        prepared_templates = self._prepare_templates(templates)
+        if not prepared_templates:
+            print("Inventory drop skipped - no usable prepared templates")
+            return "OK"
+
         max_items = self._max_items()
         threshold = self._threshold()
         print(
             "Inventory rescan-drop pass started - "
             f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"templates={len(templates)} - max_items={max_items} - threshold={threshold:.2f}"
+            f"templates={len(prepared_templates)} - max_items={max_items} - threshold={threshold:.2f}"
         )
 
         dropped = 0
-        last_matches = 0
-        last_hwnd = None
+        last_scanned_slots = 0
 
         while dropped < max_items:
-            image, hwnd, grid, scan_result = self._scan_next_drop(pid, last_hwnd, templates)
+            image, hwnd, grid, item_result, action = self._scan_next_drop(
+                pid=pid,
+                prepared_templates=prepared_templates,
+            )
             if image is None or not hwnd:
                 return "INVENTORY_DROP_CAPTURE_FAILED"
-            last_hwnd = hwnd
 
             if grid is None:
                 print(
@@ -326,18 +457,18 @@ class InventoryDropWorkerModule:
                     print(f"Inventory drop failure image save failed: {error}")
                 break
 
-            if scan_result is None:
+            last_scanned_slots = getattr(item_result, "scanned_slots", 0) if item_result is not None else 0
+
+            if action is None:
                 print(
                     "Inventory drop complete - no matched target items remain - "
-                    f"account={account_index + 1} - dropped={dropped}"
+                    f"account={account_index + 1} - dropped={dropped} - scanned_slots={last_scanned_slots}"
                 )
                 break
 
-            item_result, action = scan_result
-            last_matches = len(item_result.matches)
             print(
                 "Inventory drop rescan - "
-                f"account={account_index + 1} - remaining_matches={last_matches} - "
+                f"account={account_index + 1} - scanned_slots={last_scanned_slots} - "
                 f"next_slot={action.slot_index + 1} - next_item={action.item_name!r} - score={action.score:.3f}"
             )
 
@@ -366,6 +497,6 @@ class InventoryDropWorkerModule:
         print(
             "Inventory drop worker OK - "
             f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"dropped={dropped} - last_matches={last_matches} - threshold={threshold:.2f}"
+            f"dropped={dropped} - last_scanned_slots={last_scanned_slots} - threshold={threshold:.2f}"
         )
         return "OK"
