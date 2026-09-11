@@ -14,10 +14,17 @@ GRID_ROWS = 8
 LINE_BAND = 2
 SLOT_INSET = 0.22
 FILLED_STD_THRESHOLD = 18.0
-MIN_GRID_SCORE = 0.16
-TOP_AXIS_CANDIDATES = 60
-TOP_PER_CELL_SIZE = 5
-CELL_ASPECT_TOLERANCE = 9
+MIN_GRID_SCORE = 0.09
+TOP_AXIS_CANDIDATES = 80
+TOP_PER_CELL_SIZE = 6
+CELL_ASPECT_TOLERANCE = 6
+
+# The bag keeps almost the same physical UI size. It normally lives on the
+# right side of the game window. We search there first with a fixed slot-size
+# range instead of scaling from 1920x1080.
+RIGHT_SEARCH_START_FRACTION = 0.55
+FIXED_MIN_CELL = 36
+FIXED_MAX_CELL = 52
 
 
 @dataclass
@@ -49,18 +56,8 @@ class InventoryGridProbeResult:
 
 
 def _cell_size_range(width, height):
-    """Return a safe search range for the slot size.
-
-    The detector is not tied to a fixed screen size such as 1920x1080. It tries
-    plausible grid cell sizes based on the captured game-window size, then lets
-    edge scoring choose the real 5x8 grid.
-    """
-    min_dim = max(1, min(int(width), int(height)))
-    min_cell = max(24, int(round(min_dim * 0.025)))
-    max_cell = min(90, max(42, int(round(min_dim * 0.075))))
-    if max_cell <= min_cell:
-        max_cell = min_cell + 18
-    return min_cell, max_cell
+    """The inventory UI size is effectively fixed, not screen-scaled."""
+    return FIXED_MIN_CELL, FIXED_MAX_CELL
 
 
 def _edge_binary(image):
@@ -76,8 +73,6 @@ def _band_projection(edge_binary, axis, band=LINE_BAND):
     else:
         projection = edge_binary.sum(axis=1).astype(np.float32)
 
-    # A real line can be 1-2 pixels away from the predicted location because of
-    # scaling and anti-aliasing. Use a small max band instead of exact pixels.
     result = np.zeros_like(projection)
     for shift in range(-band, band + 1):
         if shift < 0:
@@ -90,11 +85,6 @@ def _band_projection(edge_binary, axis, band=LINE_BAND):
 
 
 def _sequence_candidates(score, line_count, cell_count, min_cell, max_cell, top_n=TOP_AXIS_CANDIDATES):
-    """Find likely equally-spaced line sequences on one axis.
-
-    For inventory, X needs 6 lines for 5 columns. Y needs 9 lines for 8 rows.
-    We do not use fixed coordinates; this searches the current screenshot.
-    """
     length = len(score)
     candidates = []
 
@@ -183,7 +173,7 @@ def _grid_score(integral, x0, cell_w, y0, cell_h):
     return float(vertical + horizontal) / float(normalizer)
 
 
-def _find_grid_geometry(edge_binary):
+def _find_grid_geometry_in_region(edge_binary, offset_x=0, offset_y=0):
     height, width = edge_binary.shape[:2]
     min_cell, max_cell = _cell_size_range(width, height)
 
@@ -225,16 +215,32 @@ def _find_grid_geometry(edge_binary):
 
     score, x0, cell_w, y0, cell_h = best
     if score < MIN_GRID_SCORE:
-        print(
-            "Inventory grid probe failed: dynamic grid score too low - "
-            f"score={score:.3f} min={MIN_GRID_SCORE:.3f}"
-        )
         return None
 
-    x_lines = [int(round(x0 + col * cell_w)) for col in range(GRID_COLS + 1)]
-    y_lines = [int(round(y0 + row * cell_h)) for row in range(GRID_ROWS + 1)]
+    x_lines = [int(round(offset_x + x0 + col * cell_w)) for col in range(GRID_COLS + 1)]
+    y_lines = [int(round(offset_y + y0 + row * cell_h)) for row in range(GRID_ROWS + 1)]
 
     return x_lines, y_lines, int(cell_w), int(cell_h), float(score)
+
+
+def _find_grid_geometry(image):
+    """Find the inventory grid without tying it to a screen resolution.
+
+    First search the right side because the bag is normally docked there. If it
+    is not found, fall back to the full window. This uses fixed UI cell sizes
+    instead of 1920x1080 ratios.
+    """
+    width, height = image.size
+
+    right_start = int(round(width * RIGHT_SEARCH_START_FRACTION))
+    right_crop = image.crop((right_start, 0, width, height))
+    right_edges = _edge_binary(right_crop)
+    geometry = _find_grid_geometry_in_region(right_edges, offset_x=right_start, offset_y=0)
+    if geometry is not None:
+        return geometry
+
+    full_edges = _edge_binary(image)
+    return _find_grid_geometry_in_region(full_edges, offset_x=0, offset_y=0)
 
 
 def _slot_stats(image, box):
@@ -258,13 +264,12 @@ def _slot_stats(image, box):
 
 
 def detect_inventory_grid(image):
-    """Dynamically detect the visible 5x8 inventory grid in the captured image."""
+    """Detect the visible 5x8 inventory grid in the captured game window."""
     width, height = image.size
     if width < 320 or height < 320:
         return None
 
-    edge_binary = _edge_binary(image)
-    geometry = _find_grid_geometry(edge_binary)
+    geometry = _find_grid_geometry(image)
     if geometry is None:
         return None
 
@@ -317,12 +322,22 @@ def draw_grid_debug(image, result):
     return debug
 
 
+def draw_failure_debug(image):
+    debug = image.copy()
+    draw = ImageDraw.Draw(debug)
+    width, height = image.size
+    right_start = int(round(width * RIGHT_SEARCH_START_FRACTION))
+    draw.rectangle((right_start, 0, width - 1, height - 1), outline=(255, 215, 0), width=3)
+    draw.text((right_start + 10, 10), "GRID NOT FOUND - right-side search area", fill=(255, 215, 0))
+    return debug
+
+
 class InventoryGridProbeModule:
     """Detect and draw the inventory slot grid for the current account only.
 
-    This stage is still safe: it captures, dynamically finds the visible 5x8
-    slot grid, and saves an annotated image. It does not click, type, move,
-    drop, or use items.
+    Safe test stage: it captures the current account PID, saves debug evidence,
+    and tries to locate the 5x8 bag grid. It never clicks, types, moves, drops,
+    or uses items.
     """
 
     name = "inventory_grid_probe"
@@ -362,6 +377,18 @@ class InventoryGridProbeModule:
         text = str(value or "logs/inventory_grid_probe").strip()
         return text or "logs/inventory_grid_probe"
 
+    def _save_image(self, image, prefix, account_index, pid):
+        folder = self._debug_dir()
+        os.makedirs(folder, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(
+            folder,
+            f"{prefix}_account_{account_index + 1}_pid_{pid}_{stamp}.png",
+        )
+        image.save(path)
+        print(f"Inventory grid probe debug image saved: {path}")
+        return path
+
     def run(self, account_index, session):
         if not self.enabled():
             return "SKIPPED"
@@ -375,9 +402,36 @@ class InventoryGridProbeModule:
         if image is None:
             return "INVENTORY_GRID_PROBE_CAPTURE_FAILED"
 
+        # Always save a raw captured image in this test stage. This prevents a
+        # failed grid detector from leaving the user with no evidence and keeps
+        # the runner moving to the next account.
+        if self._save_debug_enabled():
+            try:
+                self._save_image(image, "raw", account_index, pid)
+            except Exception as error:
+                print(
+                    "Inventory grid probe raw save failed - "
+                    f"account={account_index + 1} - pid={pid} - {error}"
+                )
+
         result = detect_inventory_grid(image)
         if result is None:
-            return "INVENTORY_GRID_PROBE_GRID_NOT_FOUND"
+            print(
+                "Inventory grid probe did not find grid - "
+                f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - "
+                f"name={page_name!r} - image={image.size[0]}x{image.size[1]}"
+            )
+            if self._save_debug_enabled():
+                try:
+                    self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
+                except Exception as error:
+                    print(
+                        "Inventory grid probe failure debug save failed - "
+                        f"account={account_index + 1} - pid={pid} - {error}"
+                    )
+
+            # Do not block account rotation during this visual probe stage.
+            return "OK"
 
         print(
             "Inventory grid probe OK - "
@@ -389,16 +443,8 @@ class InventoryGridProbeModule:
 
         if self._save_debug_enabled():
             try:
-                folder = self._debug_dir()
-                os.makedirs(folder, exist_ok=True)
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                path = os.path.join(
-                    folder,
-                    f"grid_account_{account_index + 1}_pid_{pid}_{stamp}.png",
-                )
                 debug = draw_grid_debug(image, result)
-                debug.save(path)
-                print(f"Inventory grid probe debug image saved: {path}")
+                self._save_image(debug, "grid", account_index, pid)
             except Exception as error:
                 print(
                     "Inventory grid probe debug save failed - "
