@@ -8,12 +8,16 @@ from io import BytesIO
 import cv2
 import numpy as np
 import pydirectinput
+import win32api
 import win32gui
 import win32process
 from PIL import Image
 
 from tasks.post_login_modules.window_capture import capture_window
 
+
+pydirectinput.PAUSE = 0
+pydirectinput.FAILSAFE = False
 
 DEFAULT_YES_TEMPLATE_PATHS = (
     os.path.join("assets", "drop_confirm_yes.png"),
@@ -35,7 +39,7 @@ FALLBACK_YES_BASE64 = (
     "AgPkb0yEyefxWGIyAvq/C6JqvkuOBAlLvYyKjPw4JCMgrI2Tj0xGEAlHkHgktk08lkBdfTXqrWKlLl0dLZ8XLuzw"
     "0cPsx/sRjRXFEOlpGQgUp0dGgokJTUYCY4EpiltGgsxMcVuERjX0ftaJ945/TmMz/dWhF/Z/aF69Vkb/DpfqICvH"
     "LHFc1FzCOt89wsT3kXUdPYS2l9YjFDxFtnV9q5z13wVyygm0FDZshZU2bzTLxpZi6j2Li8vW23MSry3dRXHnwY/J"
-    "f/TJSfLa2BgaPVVw2EW15pdvVrnoCkh1V8PmrJQjNl6QoqOJTgA2b1bmjChPqQVT67w4cOwMPd/c6iO/oWUZLl0c"
+    "f/TJSfLa2BgaPVVw2EW15pdvVrnoCkh1V8PmrJQjNl6QVT67w4cOwMPd/c6iO/oWUZLl0c"
     "pQ3Mrf/aLXpuZFOzn8zbsIxEcWLRCKJhUSDlmPOg8Pn85OOGcygQGMQHzG/a2Cge6Pj2iy64FXk07OxGW7MPXft2"
     "0Jjz9odfkTBuJGwqArD3K05R8YrzAfk8/5g5IzxjgSGRHS4wnzGeQQ4Xxena14G2lxsRuBYiUUa4QJ5Ft6eWdZV4"
     "wfSYYbGzlsLWt4Kd3SweGQ1B9fqRsrvIHDqzsz3JG8D5CzfRsaGVbOg6WxbVg+3bW/DT7Ttsr6kI3YvAs0Alq5rv"
@@ -50,7 +54,7 @@ FALLBACK_YES_BASE64 = (
     "/0eYape35pLTbIaJCbxdvhKfJIuWrkYqnUIi8Qh/A9uE7wvF5xnhAAAAAElFTkSuQmCC"
 )
 
-CONFIRM_MATCH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
+CONFIRM_MATCH_SCALES = (1.00,)
 BAG_ROI_PAD_LEFT = 80
 BAG_ROI_PAD_TOP = 140
 BAG_ROI_PAD_RIGHT = 220
@@ -188,13 +192,14 @@ def _candidate_regions(image, around_box=None):
         except Exception:
             pass
 
-    # The Yes prompt appears next to/over the bag in this client. This right-side
-    # fallback keeps the search local even if the exact bag box was not passed.
+    # Small right-side fallback. Full-window scan is intentionally avoided for
+    # speed during repeated drop confirmation.
     right_roi = (int(width * 0.45), 0, width, height)
     if right_roi[2] - right_roi[0] >= 30:
         regions.append(("right_side", right_roi))
 
-    regions.append(("full_window", (0, 0, width, height)))
+    if not regions:
+        regions.append(("full_window", (0, 0, width, height)))
 
     unique = []
     seen = set()
@@ -206,7 +211,10 @@ def _candidate_regions(image, around_box=None):
     return unique
 
 
-def _best_match_in_region(image, template_image, roi):
+def _best_match_in_region(image, template_image, roi, stop_check=None):
+    if stop_check and stop_check():
+        return None
+
     left, top, right, bottom = roi
     crop = image.crop((left, top, right, bottom)).convert("RGB")
     source = _pil_to_bgr(crop)
@@ -216,33 +224,21 @@ def _best_match_in_region(image, template_image, roi):
 
     best = None
     for scale in CONFIRM_MATCH_SCALES:
+        if stop_check and stop_check():
+            return None
+
         width = int(round(tmp_w * float(scale)))
         height = int(round(tmp_h * float(scale)))
         if width < 4 or height < 4 or width > src_w or height > src_h:
             continue
 
-        resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
-
         try:
+            resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
             color_result = cv2.matchTemplate(source, resized, cv2.TM_CCOEFF_NORMED)
-            _, color_score, _, color_loc = cv2.minMaxLoc(color_result)
+            _, score, _, loc = cv2.minMaxLoc(color_result)
+            score = float(score)
         except Exception:
-            color_score, color_loc = -1.0, (0, 0)
-
-        try:
-            src_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
-            tmp_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-            gray_result = cv2.matchTemplate(src_gray, tmp_gray, cv2.TM_CCOEFF_NORMED)
-            _, gray_score, _, gray_loc = cv2.minMaxLoc(gray_result)
-        except Exception:
-            gray_score, gray_loc = -1.0, (0, 0)
-
-        if gray_score > color_score:
-            score = float(gray_score)
-            loc = gray_loc
-        else:
-            score = float(color_score)
-            loc = color_loc
+            continue
 
         if best is None or score > best[0]:
             best = (score, int(loc[0]) + left, int(loc[1]) + top, width, height)
@@ -250,7 +246,10 @@ def _best_match_in_region(image, template_image, roi):
     return best
 
 
-def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around_box=None):
+def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around_box=None, stop_check=None):
+    if stop_check and stop_check():
+        return None
+
     templates = load_yes_templates(paths_text)
     if not templates:
         print("Drop confirm YES has no usable templates")
@@ -258,14 +257,19 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around
 
     best = None
     for candidate_hwnd in _visible_windows_for_pid(pid, hwnd):
+        if stop_check and stop_check():
+            return None
+
         image = capture_window(candidate_hwnd)
         if image is None:
             continue
 
         local_around_box = around_box if candidate_hwnd == hwnd else None
         for region_name, roi in _candidate_regions(image, local_around_box):
+            if stop_check and stop_check():
+                return None
             for path, template in templates:
-                match = _best_match_in_region(image, template, roi)
+                match = _best_match_in_region(image, template, roi, stop_check=stop_check)
                 if match is None:
                     continue
                 score, x, y, width, height = match
@@ -301,15 +305,28 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.78, paths_text=None, around
     )
 
 
-def click_drop_yes_if_visible(pid, hwnd=None, timeout=3.0, threshold=0.78, paths_text=None, around_box=None):
-    start = time.time()
-    while time.time() - start < float(timeout):
+def click_drop_yes_if_visible(
+    pid,
+    hwnd=None,
+    timeout=0.45,
+    threshold=0.78,
+    paths_text=None,
+    around_box=None,
+    stop_check=None,
+):
+    start = time.perf_counter()
+    while time.perf_counter() - start < float(timeout):
+        if stop_check and stop_check():
+            print("Drop confirm YES stopped by user")
+            return False
+
         match = find_drop_yes_button(
             pid=pid,
             hwnd=hwnd,
             threshold=threshold,
             paths_text=paths_text,
             around_box=around_box,
+            stop_check=stop_check,
         )
         if match is not None:
             print(
@@ -317,12 +334,16 @@ def click_drop_yes_if_visible(pid, hwnd=None, timeout=3.0, threshold=0.78, paths
                 f"hwnd={match.hwnd} - score={match.score:.3f} - "
                 f"xy={match.center_screen} - template={match.template_path}"
             )
-            pydirectinput.moveTo(match.center_screen[0], match.center_screen[1])
-            time.sleep(0.05)
-            pydirectinput.click(match.center_screen[0], match.center_screen[1])
-            time.sleep(0.35)
+            if stop_check and stop_check():
+                return False
+            try:
+                win32api.SetCursorPos((match.center_screen[0], match.center_screen[1]))
+            except Exception:
+                pydirectinput.moveTo(match.center_screen[0], match.center_screen[1], duration=0)
+            pydirectinput.click()
             return True
-        time.sleep(0.15)
+
+        time.sleep(0.03)
 
     print("Drop confirm YES timeout")
     return False
