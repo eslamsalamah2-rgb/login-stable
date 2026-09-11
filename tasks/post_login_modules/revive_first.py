@@ -1,16 +1,13 @@
-import base64
 import os
 import time
 from dataclasses import dataclass
 from functools import lru_cache
-from io import BytesIO
 
 import cv2
 import numpy as np
 import pydirectinput
 import win32api
 import win32gui
-from PIL import Image
 
 from tasks.post_login_modules.window_capture import capture_pid_window
 
@@ -23,26 +20,6 @@ REVIVE_TEMPLATE_PATHS = (
     os.path.join("assets", "Revive.png"),
     os.path.join("assets", "revive.png"),
     os.path.join("assets", "revive_button.png"),
-)
-
-# Embedded copy of the Revive button sent during the per-account revive test.
-FALLBACK_REVIVE_BASE64 = (
-    'iVBORw0KGgoAAAANSUhEUgAAADMAAAAzCAIAAAC1w6d9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJ'
-    'cEhZcwAADsMAAA7DAcdvqGQAAANWSURBVFhHzZlpTEpBGICTjgsZTEM9gq2iJZ5UwTZxrJxYZOoYLExz2cAt67um'
-    '+iaL9E0HsNBZlpu6qqj7/zXDffae/wYLsu1yO4Xu/QKPjXHytcIfFRM/xXz5piQx4+XzSKSUzw5QoyyYglCKRyCh'
-    '2WzO5eI4dsPAIJt6d3f39PQ0PDwcIvG/om7zqVKlUiWHg8HxuHg87u7uvr+/wyS2bBzxwf14swOvm8+nqih82pux'
-    'ZKyOHzExx8AcLV3ZCaEI4I5IhzzHTA2yvFyySQijZzxrbOK3tdH2QighMhbmmeRvTJUhy7VYgqFoWlP2kwNb/Pa5'
-    'Tb3cUBnc0RMfF78dCh1t5oxih48hFwptbiGITCy7ESmVl1sjKV3dsRF9UA3ZnYqBSVw78mL34UdxVAjkYkaVNSpQ'
-    'fprQaKgh1lpExIbEQvTSWIDpK50uGhexE1UfbuRuBPqSRNP5EXxH24mdRBqYxfhpLvgjrUSqWkk2mVjFgZeieLHJA'
-    'ALAsWRl25edqsfMUKAMczqMo5uBpRRosNqUkXAvTrqXwdnYw6AG9ZRc7RC6aXHg07AAGnx0mNUhg1J2oQQbkm5Nc'
-    'QWGHiwV4GTYbZxzJoeOmWAAhHH43SrKhIBiw3atIV4O54ADGyEWHCSWHyPx77d9+nKoWl78CTgj/gqBBBSgwDtJA'
-    'B6JJcCyOT7tNSxAQOReFwePcZRANpVpBFOR6EPNtrbEQHSduAiY6FxMjcAtUAnPIhNS2f2NCtnChuxqyd5HSbbDK'
-    'M78lSlK/ZAtxMkSWbx0jFJ6aEGRiu5pXvAeJL8QiOmDKzi82O3OjhODnJsmY85JSJ3LGwdFH0CjbER/d41c6A6+k'
-    'pZtWwYzUjO7nR1aWStHQAAbnSuwgl4vhmvF5nH8uVGQplZxOyj21Xh++na2fro3PaOGnKehyfiGXbBuMUq55CWH5'
-    'NAc0fROh8kN9TB9raEMwDQ0xvs7K0Td5oMTzfznf4uVpVclAoKou5LO9RBHm5/P5wwDnzQRlGN5XH6q9Fxsfxw46'
-    'dwUmxENZO9p21gXVbCMtGRNf1k77HzEAwzr01Jwg3vIV56EiwCc/56buIDjByDuSqMMcHr4R0JcARmXfl/+Ea8+L'
-    'k01LejywEzTC8ne4EjT4imw99PPpvIyI5sPGMWaWO/iYJEtTeQGsN5tV8zMsNw8osHVFO7IR4fIYqfg16RzcrFt7'
-    '+nUAAAAASUVORK5CYII='
 )
 
 REVIVE_MATCH_THRESHOLD = 0.80
@@ -69,38 +46,26 @@ def _normal_mode(value):
     return REVIVE_MODE_NONE
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def _load_template_file(path):
-    try:
-        return Image.open(path).convert("RGB")
-    except Exception as error:
-        print(f"Revive template load failed: {path} - {error}")
+    if not os.path.isfile(path):
         return None
-
-
-@lru_cache(maxsize=1)
-def _fallback_template():
-    raw = base64.b64decode(FALLBACK_REVIVE_BASE64)
-    return Image.open(BytesIO(raw)).convert("RGB")
+    image = cv2.imread(path, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Revive template load failed: {path}")
+        return None
+    return image
 
 
 def load_revive_templates():
     templates = []
     for path in REVIVE_TEMPLATE_PATHS:
-        if not os.path.isfile(path):
-            continue
         image = _load_template_file(path)
         if image is not None:
             templates.append((path, image))
-
-    if templates:
-        return templates
-
-    try:
-        return [("embedded:Revive.png", _fallback_template())]
-    except Exception as error:
-        print(f"Revive fallback template failed: {error}")
-        return []
+    if not templates:
+        print("Revive template missing - put image at assets\\Revive.png or assets\\revive.png")
+    return templates
 
 
 def _pil_to_bgr(image):
@@ -114,34 +79,27 @@ def _best_template_match(image, threshold=REVIVE_MATCH_THRESHOLD):
     src_h, src_w = source.shape[:2]
     best = None
 
-    for source_name, template_image in load_revive_templates():
-        template = _pil_to_bgr(template_image)
+    for source_name, template in load_revive_templates():
         temp_h, temp_w = template.shape[:2]
-
         for scale in REVIVE_MATCH_SCALES:
             width = int(round(temp_w * float(scale)))
             height = int(round(temp_h * float(scale)))
             if width < 8 or height < 8 or width > src_w or height > src_h:
                 continue
-
             try:
                 resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
                 resized_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-
                 color_result = cv2.matchTemplate(source, resized, cv2.TM_CCOEFF_NORMED)
                 _, color_score, _, color_loc = cv2.minMaxLoc(color_result)
-
                 gray_result = cv2.matchTemplate(source_gray, resized_gray, cv2.TM_CCOEFF_NORMED)
                 _, gray_score, _, gray_loc = cv2.minMaxLoc(gray_result)
-
                 loc_distance = abs(int(color_loc[0]) - int(gray_loc[0])) + abs(int(color_loc[1]) - int(gray_loc[1]))
                 score = (float(color_score) + float(gray_score)) / 2.0
-                loc = color_loc
                 if loc_distance > 8:
                     score -= 0.06
-
-                if best is None or score > best[0]:
-                    best = (score, int(loc[0]), int(loc[1]), width, height, source_name)
+                candidate = (score, int(color_loc[0]), int(color_loc[1]), width, height, source_name)
+                if best is None or candidate[0] > best[0]:
+                    best = candidate
             except Exception:
                 continue
 
@@ -152,19 +110,11 @@ def _best_template_match(image, threshold=REVIVE_MATCH_THRESHOLD):
     if score < float(threshold):
         print(f"Revive not found - best={score:.3f} threshold={float(threshold):.3f}")
         return None
-
     return score, x, y, width, height, source_name
 
 
 class ReviveFirstModule:
-    """First post-login account action.
-
-    Runs immediately after the current account window is brought to the front and
-    before inventory opening/drop. The per-account choice is saved in accounts.json:
-      none        -> do nothing
-      revive      -> click Revive
-      revive_here -> click Revive Here, using the known button offset to the right
-    """
+    """First post-login account action. Uses external asset images only."""
 
     name = "revive_first"
     setting_key = "enable_revive_first"
@@ -200,15 +150,14 @@ class ReviveFirstModule:
             mode = _normal_mode(session.get("revive_mode"))
             if mode != REVIVE_MODE_NONE:
                 return mode
-
         try:
-            if 0 <= account_index < len(getattr(self.launcher, "accounts_data", [])):
-                mode = _normal_mode(self.launcher.accounts_data[account_index].get("revive_mode"))
+            accounts = getattr(self.launcher, "accounts_data", [])
+            if 0 <= account_index < len(accounts):
+                mode = _normal_mode(accounts[account_index].get("revive_mode"))
                 if mode != REVIVE_MODE_NONE:
                     return mode
         except Exception:
             pass
-
         try:
             row = self.launcher.account_rows[account_index]
             var = row.get("revive_mode_var")
@@ -216,7 +165,6 @@ class ReviveFirstModule:
                 return _normal_mode(var.get())
         except Exception:
             pass
-
         return REVIVE_MODE_NONE
 
     def _match_revive(self, image, hwnd):
@@ -289,7 +237,8 @@ class ReviveFirstModule:
         print(
             "Revive first executing - "
             f"account={account_index + 1} - mode={mode} - "
-            f"score={match.score:.3f} - revive_xy={match.center_screen} - click_xy={click_xy} - source={match.source}"
+            f"score={match.score:.3f} - revive_xy={match.center_screen} - "
+            f"click_xy={click_xy} - source={match.source}"
         )
 
         if not self._click(click_xy):
