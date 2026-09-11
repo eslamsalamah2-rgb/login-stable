@@ -21,10 +21,15 @@ DEFAULT_YES_TEMPLATE_PATHS = (
 )
 
 CONFIRM_MATCH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
-BAG_ROI_PAD_LEFT = 260
-BAG_ROI_PAD_TOP = 240
-BAG_ROI_PAD_RIGHT = 320
-BAG_ROI_PAD_BOTTOM = 220
+
+# Drop confirmation must be searched only near the inventory/bag area.
+# Do not scan the full game window because other Yes-like text/buttons can be
+# matched and clicked by mistake.
+BAG_ROI_PAD_LEFT = 180
+BAG_ROI_PAD_TOP = 170
+BAG_ROI_PAD_RIGHT = 260
+BAG_ROI_PAD_BOTTOM = 190
+NO_BAG_FALLBACK_RIGHT_FRACTION = 0.55
 
 
 @dataclass
@@ -128,6 +133,15 @@ def _visible_windows_for_pid(pid, first_hwnd=None):
 
 
 def _candidate_regions(image, around_box=None):
+    """Return safe ROIs for the Drop confirmation Yes search.
+
+    Normal Drop flow passes the inventory/grid box as around_box. In that case
+    we scan only a padded box around the bag. This prevents accidental clicks on
+    unrelated Yes buttons/text in the wider game window.
+
+    If around_box is missing, use only a narrow right-side fallback. Never scan
+    the full window for Drop Yes.
+    """
     width, height = image.size
     regions = []
 
@@ -141,21 +155,20 @@ def _candidate_regions(image, around_box=None):
                 min(height, y2 + BAG_ROI_PAD_BOTTOM),
             )
             if roi[2] - roi[0] >= 30 and roi[3] - roi[1] >= 20:
-                regions.append(("around_bag_wide", roi))
+                regions.append(("inventory_bag_area_only", roi))
         except Exception:
             pass
 
-    regions.append(("right_side", (int(width * 0.35), 0, width, height)))
-    regions.append(("full_window", (0, 0, width, height)))
+        # Critical safety rule: when the bag box is known, do not fall back to
+        # right_side/full_window. Missing Yes is safer than clicking a wrong Yes.
+        if regions:
+            return regions
 
-    unique = []
-    seen = set()
-    for name, roi in regions:
-        if roi in seen:
-            continue
-        seen.add(roi)
-        unique.append((name, roi))
-    return unique
+    fallback_roi = (int(width * NO_BAG_FALLBACK_RIGHT_FRACTION), 0, width, height)
+    if fallback_roi[2] - fallback_roi[0] >= 30 and fallback_roi[3] - fallback_roi[1] >= 20:
+        regions.append(("right_bag_fallback_only", fallback_roi))
+
+    return regions
 
 
 def _best_match_in_region(image, template, roi, stop_check=None):
@@ -221,7 +234,7 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around
                     best = (score, candidate_hwnd, path, x, y, width, height, region_name)
 
     if best is None:
-        print("Drop confirm YES not found - no match candidates")
+        print("Drop confirm YES not found - no match candidates in inventory/bag area")
         return None
 
     score, match_hwnd, path, x, y, width, height, region_name = best
