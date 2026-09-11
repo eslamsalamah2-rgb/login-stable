@@ -1,4 +1,4 @@
-""import base64
+import base64
 import os
 import time
 from dataclasses import dataclass
@@ -160,7 +160,7 @@ class ReviveFirstModule:
     """First post-login account action.
 
     Runs immediately after the current account window is brought to the front and
-    before inventory opening/drop.  The per-account choice is saved in accounts.json:
+    before inventory opening/drop. The per-account choice is saved in accounts.json:
       none        -> do nothing
       revive      -> click Revive
       revive_here -> click Revive Here, using the known button offset to the right
@@ -308,4 +308,3 @@ class ReviveFirstModule:
 
         print(f"Revive first OK - account={account_index + 1} - mode={mode}")
         return "OK"
-""
