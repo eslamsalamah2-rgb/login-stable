@@ -48,11 +48,19 @@ MERGE_SETTING_DEFAULTS = {
     "enable_inventory_drop_worker": True,
     "inventory_drop_templates_dir": "assets/drop_items",
     "inventory_drop_match_threshold": 0.78,
-    "inventory_drop_max_items_per_account": 1,
+    "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
     "inventory_drop_click_delay": 0.12,
+    "inventory_drop_target_mode": "top_right",
+    "inventory_drop_target_margin_x": 6,
+    "inventory_drop_target_margin_y": 6,
     "inventory_drop_target_x_fraction": 0.50,
     "inventory_drop_target_y_fraction": 0.45,
+    "inventory_drop_confirm_yes_enabled": True,
+    "inventory_drop_confirm_yes_threshold": 0.76,
+    "inventory_drop_confirm_yes_timeout": 3.0,
+    "inventory_drop_confirm_yes_strict": False,
+    "inventory_drop_confirm_yes_paths": "",
     "inventory_drop_save_debug_image": True,
     "inventory_drop_debug_dir": "logs/inventory_drop_worker",
 }
@@ -76,14 +84,22 @@ MERGE_SETTING_LABELS = {
     "inventory_item_match_threshold": "inventory_item_match_threshold | حساسية مطابقة صور العناصر",
     "inventory_item_probe_save_debug_image": "inventory_item_probe_save_debug_image | حفظ صورة Debug لمطابقة العناصر",
     "inventory_item_probe_debug_dir": "inventory_item_probe_debug_dir | مجلد صور Debug للعناصر",
-    "enable_inventory_drop_worker": "enable_inventory_drop_worker | Drop Test - رمي العناصر المطابقة",
+    "enable_inventory_drop_worker": "enable_inventory_drop_worker | Drop - رمي العناصر المطابقة",
     "inventory_drop_templates_dir": "inventory_drop_templates_dir | مجلد صور عناصر الدروب",
     "inventory_drop_match_threshold": "inventory_drop_match_threshold | حساسية الدروب - أعلى أمانًا",
-    "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | أقصى عدد عناصر يتم رميها لكل حساب في الدورة",
+    "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | عدد العناصر المرميّة قبل الانتقال للحساب التالي",
     "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي",
     "inventory_drop_click_delay": "inventory_drop_click_delay | التأخير بين ضغطات الدروب/ثانية",
+    "inventory_drop_target_mode": "inventory_drop_target_mode | وضع مكان الرمي: top_right أو fraction",
+    "inventory_drop_target_margin_x": "inventory_drop_target_margin_x | هامش الرمي من يمين النافذة بالبكسل",
+    "inventory_drop_target_margin_y": "inventory_drop_target_margin_y | هامش الرمي من أعلى النافذة بالبكسل",
     "inventory_drop_target_x_fraction": "inventory_drop_target_x_fraction | مكان الرمي أفقيًا كنسبة من عرض النافذة",
     "inventory_drop_target_y_fraction": "inventory_drop_target_y_fraction | مكان الرمي رأسيًا كنسبة من ارتفاع النافذة",
+    "inventory_drop_confirm_yes_enabled": "inventory_drop_confirm_yes_enabled | الضغط على Yes بعد الدروب",
+    "inventory_drop_confirm_yes_threshold": "inventory_drop_confirm_yes_threshold | حساسية صورة Yes",
+    "inventory_drop_confirm_yes_timeout": "inventory_drop_confirm_yes_timeout | مدة انتظار Yes/ثانية",
+    "inventory_drop_confirm_yes_strict": "inventory_drop_confirm_yes_strict | إيقاف الحساب إذا لم يتم ضغط Yes",
+    "inventory_drop_confirm_yes_paths": "inventory_drop_confirm_yes_paths | مسارات إضافية لصورة Yes",
     "inventory_drop_save_debug_image": "inventory_drop_save_debug_image | حفظ صور Debug قبل/بعد الدروب",
     "inventory_drop_debug_dir": "inventory_drop_debug_dir | مجلد صور Debug للدروب",
 }
@@ -111,11 +127,19 @@ DROP_TEST_PRESET = {
     "enable_inventory_drop_worker": True,
     "inventory_drop_templates_dir": "assets/drop_items",
     "inventory_drop_match_threshold": 0.78,
-    "inventory_drop_max_items_per_account": 1,
+    "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
     "inventory_drop_click_delay": 0.12,
+    "inventory_drop_target_mode": "top_right",
+    "inventory_drop_target_margin_x": 6,
+    "inventory_drop_target_margin_y": 6,
     "inventory_drop_target_x_fraction": 0.50,
     "inventory_drop_target_y_fraction": 0.45,
+    "inventory_drop_confirm_yes_enabled": True,
+    "inventory_drop_confirm_yes_threshold": 0.76,
+    "inventory_drop_confirm_yes_timeout": 3.0,
+    "inventory_drop_confirm_yes_strict": False,
+    "inventory_drop_confirm_yes_paths": "",
     "inventory_drop_save_debug_image": True,
     "inventory_drop_debug_dir": "logs/inventory_drop_worker",
     "post_login_account_delay_seconds": 2.0,
@@ -134,10 +158,10 @@ def _install_merge_settings():
 
 
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
-    """Prepare the program for the current open/grid/item/drop test.
+    """Prepare the program for the current full-bag drop test.
 
     This is intentionally temporary for the merge test stage. It forces the
-    safe inventory-open + grid + item-probe + limited-drop settings even if
+    inventory-open + grid + item-probe + full visible-bag drop settings even if
     settings.json still contains older values from another machine.
     """
     try:
@@ -145,10 +169,10 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Open/Grid/Item/Drop test preset applied - "
+            "Inventory Full-Bag Drop test preset applied - "
             f"reason={reason} - values={DROP_TEST_PRESET}"
         )
-        self.set_status("اختبار Drop جاهز: يرمي عنصر واحد مطابق لكل حساب في الدورة")
+        self.set_status("اختبار Drop جاهز: يفضي كل العناصر المطابقة قبل الحساب التالي")
     except Exception as error:
         print(f"Inventory Drop preset failed: {error}")
         self.set_status("فشل تجهيز اختبار Drop")
@@ -163,7 +187,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_drop_test_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_full_bag_drop_test_button"))
     except Exception as error:
         print(f"Could not start Inventory Drop test: {error}")
 
@@ -171,7 +195,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="drop_test_button",
+        reason="full_bag_drop_test_button",
         start_runner=True,
     )
 
@@ -181,7 +205,7 @@ def _add_inventory_probe_test_button(self):
         controls = self.resume_button.master
         self.inventory_probe_test_button = ctk.CTkButton(
             controls,
-            text="Drop Test",
+            text="Drop All",
             width=115,
             height=40,
             fg_color="#6b4f00",
