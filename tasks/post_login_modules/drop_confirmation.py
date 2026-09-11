@@ -1,25 +1,17 @@
-import base64
 import os
 import time
 from dataclasses import dataclass
 from functools import lru_cache
-from io import BytesIO
 
 import cv2
 import numpy as np
 import pydirectinput
 import win32api
-import win32con
 import win32gui
 import win32process
-from PIL import Image
 
 from tasks.post_login_modules.window_capture import capture_window
 
-
-# نفس فكرة البرنامج القديم: مفيش PAUSE عام، وحركة الماوس مباشرة.
-pydirectinput.PAUSE = 0
-pydirectinput.FAILSAFE = False
 
 DEFAULT_YES_TEMPLATE_PATHS = (
     os.path.join("assets", "drop_confirm_yes.png"),
@@ -28,37 +20,7 @@ DEFAULT_YES_TEMPLATE_PATHS = (
     os.path.join("assets", "drop_yes.png"),
 )
 
-# نسخة مدمجة من صورة Yes التي أرسلها المستخدم.
-# الملفات الخارجية أعلاه ما زالت لها أولوية، لكن لو مش موجودة نستخدم دي.
-FALLBACK_YES_BASE64 = (
-    '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'
-    'xnhAAAAAElFTkSuQmCC'
-)
-
-# رجعنا الـ multi-scale لأن بعد التسريع 1.00 فقط ممكن يفوّت زر Yes.
 CONFIRM_MATCH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
-
-# صندوق البحث حوالين الشنطة. وسعناه لأن نافذة Yes بتطلع جنب الشنطة مش في مكان ثابت.
 BAG_ROI_PAD_LEFT = 260
 BAG_ROI_PAD_TOP = 240
 BAG_ROI_PAD_RIGHT = 320
@@ -72,57 +34,49 @@ class DropConfirmMatch:
     template_path: str
     center_screen: tuple[int, int]
     center_window: tuple[int, int]
+    region: str
 
 
 def _template_paths(paths_text=None):
+    paths = []
     if paths_text:
-        paths = []
-        for part in str(paths_text).replace(";", ",").split(","):
+        for part in str(paths_text).replace(";", ",").replace("|", ",").split(","):
             text = part.strip().strip('"')
             if text:
                 paths.append(text)
-        if paths:
-            return tuple(paths)
-    return DEFAULT_YES_TEMPLATE_PATHS
+    paths.extend(DEFAULT_YES_TEMPLATE_PATHS)
+
+    unique = []
+    seen = set()
+    for path in paths:
+        key = os.path.normcase(os.path.normpath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return tuple(unique)
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _load_template_file(path):
-    try:
-        return Image.open(path).convert("RGB")
-    except Exception as error:
-        print(f"Drop confirm YES template load failed: {path} - {error}")
+    if not os.path.isfile(path):
         return None
-
-
-@lru_cache(maxsize=1)
-def _fallback_yes_template():
-    raw = base64.b64decode(FALLBACK_YES_BASE64)
-    return Image.open(BytesIO(raw)).convert("RGB")
+    image = cv2.imread(path, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Drop confirm YES template load failed: {path}")
+        return None
+    return image
 
 
 def load_yes_templates(paths_text=None):
     templates = []
-
     for path in _template_paths(paths_text):
-        if not os.path.isfile(path):
-            continue
-
         image = _load_template_file(path)
-        if image is None:
-            continue
-        templates.append((path, image))
-
-    if templates:
-        return templates
-
-    try:
-        image = _fallback_yes_template()
-        print("Drop confirm YES using embedded fallback template")
-        return [("embedded:drop_confirm_yes", image)]
-    except Exception as error:
-        print(f"Drop confirm YES fallback template failed: {error}")
-        return []
+        if image is not None:
+            templates.append((path, image))
+    if not templates:
+        print("Drop confirm YES template missing - put image at assets\\drop_confirm_yes.png or assets\\yes_no.png")
+    return templates
 
 
 def _visible_windows_for_pid(pid, first_hwnd=None):
@@ -157,11 +111,6 @@ def _visible_windows_for_pid(pid, first_hwnd=None):
     except Exception:
         pass
 
-    if first_hwnd and first_hwnd in windows:
-        rest = [hwnd for hwnd in windows if hwnd != first_hwnd]
-    else:
-        rest = list(windows)
-
     def area(hwnd):
         try:
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
@@ -169,13 +118,13 @@ def _visible_windows_for_pid(pid, first_hwnd=None):
         except Exception:
             return 0
 
-    rest.sort(key=area, reverse=True)
-    return ([first_hwnd] if first_hwnd and first_hwnd in windows else []) + rest
+    if first_hwnd and first_hwnd in windows:
+        rest = [hwnd for hwnd in windows if hwnd != first_hwnd]
+        rest.sort(key=area, reverse=True)
+        return [first_hwnd] + rest
 
-
-def _pil_to_bgr(image):
-    rgb = np.array(image.convert("RGB"))
-    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    windows.sort(key=area, reverse=True)
+    return windows
 
 
 def _candidate_regions(image, around_box=None):
@@ -196,12 +145,7 @@ def _candidate_regions(image, around_box=None):
         except Exception:
             pass
 
-    # احتياطي سريع: يمين الشاشة فقط، لأن Popup الدروب بيطلع حوالين الشنطة.
-    right_roi = (int(width * 0.35), 0, width, height)
-    if right_roi[2] - right_roi[0] >= 30:
-        regions.append(("right_side", right_roi))
-
-    # Full window كآخر حل فقط. وجوده لا يبطئ غالبًا لأن زر Yes صغير والـ timeout قصير.
+    regions.append(("right_side", (int(width * 0.35), 0, width, height)))
     regions.append(("full_window", (0, 0, width, height)))
 
     unique = []
@@ -214,49 +158,39 @@ def _candidate_regions(image, around_box=None):
     return unique
 
 
-def _best_match_in_region(image, template_image, roi, stop_check=None):
+def _best_match_in_region(image, template, roi, stop_check=None):
     if stop_check and stop_check():
         return None
 
     left, top, right, bottom = roi
-    crop = image.crop((left, top, right, bottom)).convert("RGB")
-    source = _pil_to_bgr(crop)
-    src_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
-
-    template = _pil_to_bgr(template_image)
+    crop_rgb = np.array(image.crop((left, top, right, bottom)).convert("RGB"))
+    source = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+    source_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
     tmp_h, tmp_w = template.shape[:2]
-
     best = None
+
     for scale in CONFIRM_MATCH_SCALES:
         if stop_check and stop_check():
             return None
-
         width = int(round(tmp_w * float(scale)))
         height = int(round(tmp_h * float(scale)))
         if width < 4 or height < 4 or width > source.shape[1] or height > source.shape[0]:
             continue
-
         try:
             resized = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
-
             color_result = cv2.matchTemplate(source, resized, cv2.TM_CCOEFF_NORMED)
             _, color_score, _, color_loc = cv2.minMaxLoc(color_result)
-
             tmp_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-            gray_result = cv2.matchTemplate(src_gray, tmp_gray, cv2.TM_CCOEFF_NORMED)
+            gray_result = cv2.matchTemplate(source_gray, tmp_gray, cv2.TM_CCOEFF_NORMED)
             _, gray_score, _, gray_loc = cv2.minMaxLoc(gray_result)
-
             if gray_score > color_score:
-                score = float(gray_score)
-                loc = gray_loc
+                score, loc = float(gray_score), gray_loc
             else:
-                score = float(color_score)
-                loc = color_loc
+                score, loc = float(color_score), color_loc
+            if best is None or score > best[0]:
+                best = (score, int(loc[0]) + left, int(loc[1]) + top, width, height)
         except Exception:
             continue
-
-        if best is None or score > best[0]:
-            best = (score, int(loc[0]) + left, int(loc[1]) + top, width, height)
 
     return best
 
@@ -267,28 +201,21 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around
 
     templates = load_yes_templates(paths_text)
     if not templates:
-        print("Drop confirm YES has no usable templates")
         return None
 
     best = None
     for candidate_hwnd in _visible_windows_for_pid(pid, hwnd):
         if stop_check and stop_check():
             return None
-
         image = capture_window(candidate_hwnd)
         if image is None:
             continue
-
-        local_around_box = around_box if candidate_hwnd == hwnd else None
-        for region_name, roi in _candidate_regions(image, local_around_box):
-            if stop_check and stop_check():
-                return None
-
+        local_around = around_box if candidate_hwnd == hwnd else None
+        for region_name, roi in _candidate_regions(image, local_around):
             for path, template in templates:
                 match = _best_match_in_region(image, template, roi, stop_check=stop_check)
                 if match is None:
                     continue
-
                 score, x, y, width, height = match
                 if best is None or score > best[0]:
                     best = (score, candidate_hwnd, path, x, y, width, height, region_name)
@@ -301,8 +228,7 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around
     if score < float(threshold):
         print(
             "Drop confirm YES not found - "
-            f"best={score:.3f} threshold={float(threshold):.3f} "
-            f"template={path} region={region_name}"
+            f"best={score:.3f} threshold={float(threshold):.3f} template={path} region={region_name}"
         )
         return None
 
@@ -313,48 +239,19 @@ def find_drop_yes_button(pid, hwnd=None, threshold=0.72, paths_text=None, around
 
     center_window = (int(x + width / 2), int(y + height / 2))
     center_screen = (int(left + center_window[0]), int(top + center_window[1]))
-    return DropConfirmMatch(
-        hwnd=match_hwnd,
-        score=float(score),
-        template_path=f"{path}@{region_name}",
-        center_screen=center_screen,
-        center_window=center_window,
+    print(
+        "Drop confirm YES found - "
+        f"score={score:.3f} template={path} region={region_name} hwnd={match_hwnd} xy={center_screen}"
     )
+    return DropConfirmMatch(int(match_hwnd), float(score), path, center_screen, center_window, region_name)
 
 
-def _instant_left_click(x, y):
-    x = int(x)
-    y = int(y)
-    win32api.SetCursorPos((x, y))
-    time.sleep(0.01)
-
-    # pydirectinput مع إحداثيات مباشرة أثبت من click() بدون إحداثيات.
-    try:
-        pydirectinput.click(x, y)
-        return
-    except Exception:
-        pass
-
-    # احتياطي Win32 مباشر.
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
-    time.sleep(0.01)
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
-
-
-def click_drop_yes_if_visible(
-    pid,
-    hwnd=None,
-    timeout=1.20,
-    threshold=0.72,
-    paths_text=None,
-    around_box=None,
-    stop_check=None,
-):
+def click_drop_yes_if_visible(pid, hwnd=None, timeout=1.20, threshold=0.72, paths_text=None, around_box=None, stop_check=None):
     start = time.perf_counter()
+    timeout = max(0.05, float(timeout))
 
-    while time.perf_counter() - start < float(timeout):
+    while time.perf_counter() - start < timeout:
         if stop_check and stop_check():
-            print("Drop confirm YES stopped by user")
             return False
 
         match = find_drop_yes_button(
@@ -366,19 +263,16 @@ def click_drop_yes_if_visible(
             stop_check=stop_check,
         )
         if match is not None:
-            print(
-                "Drop confirm YES found - "
-                f"hwnd={match.hwnd} - score={match.score:.3f} - "
-                f"xy={match.center_screen} - template={match.template_path}"
-            )
+            try:
+                win32api.SetCursorPos((int(match.center_screen[0]), int(match.center_screen[1])))
+            except Exception:
+                pydirectinput.moveTo(int(match.center_screen[0]), int(match.center_screen[1]), duration=0)
             if stop_check and stop_check():
                 return False
-
-            _instant_left_click(match.center_screen[0], match.center_screen[1])
-            time.sleep(0.05)
+            pydirectinput.click()
             return True
 
-        time.sleep(0.04)
+        time.sleep(0.03)
 
     print("Drop confirm YES timeout")
     return False
