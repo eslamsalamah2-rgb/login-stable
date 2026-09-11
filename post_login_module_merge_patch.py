@@ -50,8 +50,8 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_drop_match_threshold": 0.88,
     "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
-    "inventory_drop_click_delay": 0.02,
-    "inventory_drop_after_drop_delay": 0.02,
+    "inventory_drop_click_delay": 0.01,
+    "inventory_drop_after_drop_delay": 0.0,
     "inventory_drop_target_mode": "top_right",
     "inventory_drop_target_margin_x": 1,
     "inventory_drop_target_margin_y": 1,
@@ -59,7 +59,7 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_drop_target_y_fraction": 0.45,
     "inventory_drop_confirm_yes_enabled": True,
     "inventory_drop_confirm_yes_threshold": 0.76,
-    "inventory_drop_confirm_yes_timeout": 0.80,
+    "inventory_drop_confirm_yes_timeout": 0.45,
     "inventory_drop_confirm_yes_strict": False,
     "inventory_drop_confirm_yes_paths": "",
     "inventory_drop_save_debug_image": False,
@@ -112,8 +112,8 @@ DROP_TEST_PRESET.update(
     {
         "enable_post_login_commands": True,
         "post_login_debug_only": False,
-        "post_login_account_delay_seconds": 0.25,
-        "post_login_round_delay_seconds": 0.50,
+        "post_login_account_delay_seconds": 0.10,
+        "post_login_round_delay_seconds": 0.25,
     }
 )
 
@@ -238,7 +238,29 @@ def _run_account_commands_with_modules(self, index, session):
                 f"account={index + 1} - pid={pid} - name={page_name!r}"
             )
 
+            # Let long real modules observe key 9 immediately. The keyboard/UI
+            # handler sets this event through runner.request_stop().
+            try:
+                self.launcher.post_login_stop_event = self.stop_event
+            except Exception:
+                pass
+
             result = run_enabled_post_login_modules(self.launcher, index, session)
+
+            try:
+                if hasattr(self.launcher, "post_login_stop_event"):
+                    delattr(self.launcher, "post_login_stop_event")
+            except Exception:
+                pass
+
+            if result == "STOP_REQUESTED" or self.stop_event.is_set():
+                print(
+                    "Post-login real modules stopped by user - "
+                    f"account={index + 1} - pid={pid}"
+                )
+                self._set_status("أوامر الدخول اتوقفت بزر 9")
+                return "OK"
+
             if result != "OK":
                 return result
 
