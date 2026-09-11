@@ -1,14 +1,16 @@
 """Separate stable login typing from fast drop mouse movement.
 
-The drop worker needs zero mouse delay, but login typing must stay conservative so
-Conquer reliably receives username/password characters.  This patch keeps the
-fast mode local to Drop/Yes clicks and restores a safe typing mode during login.
+Drop needs instant mouse movement. Login must stay conservative so Conquer does
+not miss digits/letters while username and password are being typed.
 """
+
+import time
 
 import pydirectinput
 
 
-LOGIN_INPUT_PAUSE = 0.03
+LOGIN_INPUT_PAUSE = 0.05
+LOGIN_TYPE_INTERVAL = 0.18
 DROP_INPUT_PAUSE = 0.0
 
 # Safe default for the whole program after all drop modules were imported.
@@ -23,8 +25,44 @@ def _install_login_stable_input_patch():
         print(f"Input speed patch: LoginTask unavailable - {error}")
         return
 
+    original_type_exact = LoginTask._type_exact
     original_enter = LoginTask._enter_credentials_at_positions
     original_rewrite = LoginTask.rewrite_password
+
+    def type_exact_slow(self, text, interval=0.04):
+        old_pause = getattr(pydirectinput, "PAUSE", LOGIN_INPUT_PAUSE)
+        pydirectinput.PAUSE = LOGIN_INPUT_PAUSE
+        try:
+            safe_interval = max(float(interval or 0.0), LOGIN_TYPE_INTERVAL)
+            return original_type_exact(self, text, interval=safe_interval)
+        finally:
+            pydirectinput.PAUSE = old_pause
+
+    def clear_username_stable(self):
+        old_pause = getattr(pydirectinput, "PAUSE", LOGIN_INPUT_PAUSE)
+        pydirectinput.PAUSE = LOGIN_INPUT_PAUSE
+        try:
+            # A missed digit means the whole field must be fully cleared before
+            # a retry. Keep this longer than the old quick clear.
+            for _ in range(30):
+                if not getattr(self, "running", True):
+                    return
+                pydirectinput.press("backspace")
+                time.sleep(0.03)
+        finally:
+            pydirectinput.PAUSE = old_pause
+
+    def clear_password_stable(self):
+        old_pause = getattr(pydirectinput, "PAUSE", LOGIN_INPUT_PAUSE)
+        pydirectinput.PAUSE = LOGIN_INPUT_PAUSE
+        try:
+            for _ in range(30):
+                if not getattr(self, "running", True):
+                    return
+                pydirectinput.press("backspace")
+                time.sleep(0.03)
+        finally:
+            pydirectinput.PAUSE = old_pause
 
     def enter_credentials_stable(self, username, password, positions):
         old_pause = getattr(pydirectinput, "PAUSE", LOGIN_INPUT_PAUSE)
@@ -42,6 +80,9 @@ def _install_login_stable_input_patch():
         finally:
             pydirectinput.PAUSE = old_pause
 
+    LoginTask._type_exact = type_exact_slow
+    LoginTask.clear_username_field = clear_username_stable
+    LoginTask.clear_password_field = clear_password_stable
     LoginTask._enter_credentials_at_positions = enter_credentials_stable
     LoginTask.rewrite_password = rewrite_password_stable
 
@@ -100,4 +141,7 @@ _install_login_stable_input_patch()
 _install_drop_fast_click_patch()
 _install_yes_fast_click_patch()
 
-print("Input speed patch active: login typing stable, drop mouse fast")
+print(
+    "Input speed patch active: login typing stable/slow, drop mouse fast - "
+    f"login_interval={LOGIN_TYPE_INTERVAL}s"
+)
