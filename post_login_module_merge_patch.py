@@ -30,6 +30,13 @@ MERGE_SETTING_DEFAULTS = {
     "enable_inventory_probe": False,
     "inventory_probe_save_debug_image": True,
     "inventory_probe_debug_dir": "logs/inventory_probe",
+    "enable_inventory_ensure_open": True,
+    "inventory_open_hotkey": "i",
+    "inventory_open_attempts": 2,
+    "inventory_open_wait_seconds": 0.80,
+    "inventory_open_strict": False,
+    "inventory_open_probe_save_debug_image": True,
+    "inventory_open_probe_debug_dir": "logs/inventory_open_probe",
     "enable_inventory_grid_probe": True,
     "inventory_grid_probe_save_debug_image": True,
     "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
@@ -39,6 +46,13 @@ MERGE_SETTING_LABELS = {
     "enable_inventory_probe": "enable_inventory_probe | Inventory Probe - التقاط صورة كاملة لنافذة الحساب الحالي",
     "inventory_probe_save_debug_image": "inventory_probe_save_debug_image | Inventory Probe - حفظ صورة كاملة Debug",
     "inventory_probe_debug_dir": "inventory_probe_debug_dir | Inventory Probe - مجلد الصور الكاملة",
+    "enable_inventory_ensure_open": "enable_inventory_ensure_open | فتح الشنطة تلقائيًا إذا كانت مقفولة",
+    "inventory_open_hotkey": "inventory_open_hotkey | زر فتح الشنطة داخل اللعبة",
+    "inventory_open_attempts": "inventory_open_attempts | عدد محاولات فتح الشنطة",
+    "inventory_open_wait_seconds": "inventory_open_wait_seconds | انتظار بعد ضغط زر الشنطة/ثانية",
+    "inventory_open_strict": "inventory_open_strict | إيقاف الحساب إذا لم تفتح الشنطة",
+    "inventory_open_probe_save_debug_image": "inventory_open_probe_save_debug_image | حفظ صور اختبار فتح الشنطة",
+    "inventory_open_probe_debug_dir": "inventory_open_probe_debug_dir | مجلد صور اختبار فتح الشنطة",
     "enable_inventory_grid_probe": "enable_inventory_grid_probe | Grid Probe - تحديد خانات الشنطة 5x8",
     "inventory_grid_probe_save_debug_image": "inventory_grid_probe_save_debug_image | Grid Probe - حفظ صورة عليها مربعات الخانات",
     "inventory_grid_probe_debug_dir": "inventory_grid_probe_debug_dir | Grid Probe - مجلد صور الخانات",
@@ -49,6 +63,13 @@ GRID_TEST_PRESET = {
     "enable_post_login_commands": True,
     "post_login_debug_only": False,
     "enable_inventory_probe": False,
+    "enable_inventory_ensure_open": True,
+    "inventory_open_hotkey": "i",
+    "inventory_open_attempts": 2,
+    "inventory_open_wait_seconds": 0.80,
+    "inventory_open_strict": False,
+    "inventory_open_probe_save_debug_image": True,
+    "inventory_open_probe_debug_dir": "logs/inventory_open_probe",
     "enable_inventory_grid_probe": True,
     "inventory_grid_probe_save_debug_image": True,
     "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
@@ -71,21 +92,21 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
     """Prepare the program for the current InventoryGridProbe test automatically.
 
     This is intentionally temporary for the merge test stage. It forces the
-    safe grid-probe settings even if settings.json still contains older values
-    from another machine.
+    safe inventory-open + grid-probe settings even if settings.json still
+    contains older values from another machine.
     """
     try:
         self.runtime_settings.update(GRID_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Grid Probe test preset applied - "
+            "Inventory Open/Grid test preset applied - "
             f"reason={reason} - values={GRID_TEST_PRESET}"
         )
-        self.set_status("اختبار Grid Probe جاهز تلقائيًا - افتح الشنطة ثم اضغط 8")
+        self.set_status("اختبار فتح الشنطة/Grid جاهز تلقائيًا - شغّل الحسابات ثم اضغط 8")
     except Exception as error:
-        print(f"Inventory Grid Probe preset failed: {error}")
-        self.set_status("فشل تجهيز اختبار Grid Probe")
+        print(f"Inventory Open/Grid preset failed: {error}")
+        self.set_status("فشل تجهيز اختبار فتح الشنطة/Grid")
         return
 
     if not start_runner:
@@ -93,19 +114,19 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 
     runner = getattr(self, "post_login_runner", None)
     if runner is None:
-        self.set_status("Grid Probe جاهز، لكن أوامر الدخول غير جاهزة")
+        self.set_status("اختبار الشنطة جاهز، لكن أوامر الدخول غير جاهزة")
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_grid_probe_test_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_open_grid_test_button"))
     except Exception as error:
-        print(f"Could not start Inventory Grid Probe test: {error}")
+        print(f"Could not start Inventory Open/Grid test: {error}")
 
 
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="grid_test_button",
+        reason="open_grid_test_button",
         start_runner=True,
     )
 
@@ -115,8 +136,8 @@ def _add_inventory_probe_test_button(self):
         controls = self.resume_button.master
         self.inventory_probe_test_button = ctk.CTkButton(
             controls,
-            text="Grid Test",
-            width=115,
+            text="Bag/Grid Test",
+            width=125,
             height=40,
             fg_color="#6b4f00",
             hover_color="#806000",
@@ -124,7 +145,7 @@ def _add_inventory_probe_test_button(self):
         )
         self.inventory_probe_test_button.pack(side="left", padx=6, pady=10)
     except Exception as error:
-        print(f"Could not add Inventory Grid Probe test button: {error}")
+        print(f"Could not add Inventory Open/Grid test button: {error}")
 
 
 def _selection_init_with_probe_button(self):
@@ -143,7 +164,7 @@ def _selection_init_with_probe_button(self):
             ),
         )
     except Exception as error:
-        print(f"Could not auto-apply Inventory Grid Probe settings: {error}")
+        print(f"Could not auto-apply Inventory Open/Grid settings: {error}")
 
 
 def _has_enabled_work_module_with_merge(self):
