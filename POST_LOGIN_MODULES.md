@@ -49,6 +49,32 @@ inventory_probe_save_debug_image = true
 inventory_probe_debug_dir = logs/inventory_probe
 ```
 
+### InventoryEnsureOpenModule
+
+File:
+
+```text
+tasks/post_login_modules/inventory_ensure_open.py
+```
+
+Purpose:
+
+- detects whether the bag is open using the manual image anchor
+- preferred anchor file: `assets/inventory_open.png`
+- if the bag image is not found, presses the configured inventory hotkey
+- verifies again after pressing the hotkey
+- does not click items, drop, or use anything
+
+Settings:
+
+```text
+enable_inventory_ensure_open = true
+inventory_open_hotkey = i
+inventory_open_attempts = 2
+inventory_open_wait_seconds = 0.80
+inventory_open_strict = false
+```
+
 ### InventoryGridProbeModule
 
 File:
@@ -59,11 +85,10 @@ tasks/post_login_modules/inventory_grid_probe.py
 
 Purpose:
 
-- second safe merge piece
 - captures the exact current account window by PID
-- dynamically searches the captured image for the visible 5 columns x 8 rows inventory grid
-- does not depend on fixed 1920x1080 coordinates
-- works by detecting equally-spaced grid edges and scoring the best 5x8 candidate
+- detects the open bag by image anchor first
+- computes the 5 columns x 8 rows slot grid from the detected bag position
+- fallback: dynamic line-grid detector if the image anchor is not found
 - saves an annotated debug image with boxes around the 40 slots
 - gives a rough filled/empty count for logging
 - does not click
@@ -78,25 +103,52 @@ inventory_grid_probe_save_debug_image = true
 inventory_grid_probe_debug_dir = logs/inventory_grid_probe
 ```
 
-Expected debug folder:
+### InventoryItemProbeModule
+
+File:
 
 ```text
-logs/inventory_grid_probe
+tasks/post_login_modules/inventory_item_probe.py
 ```
 
-Expected log lines:
+Purpose:
+
+- reads PNG/JPG item templates from `assets/drop_items`
+- compares every detected bag slot against those item templates
+- logs matched item names, slot numbers, rows, columns, and scores
+- saves an annotated debug image showing matched slots
+- probe-only: no clicking, no dropping, no using items
+
+Settings:
 
 ```text
-Inventory grid probe OK
-Inventory grid probe debug image saved
+enable_inventory_item_probe = true
+inventory_item_templates_dir = assets/drop_items
+inventory_item_match_threshold = 0.72
+inventory_item_probe_save_debug_image = true
+inventory_item_probe_debug_dir = logs/inventory_item_probe
+```
+
+Expected item template folder:
+
+```text
+assets/drop_items
+```
+
+Expected item probe log lines:
+
+```text
+Inventory item probe OK
+Inventory item match
+Inventory item probe debug image saved
 ```
 
 ## Next intended modules
 
-1. Confirm InventoryGridProbe boxes match the real slots on different screen sizes.
-2. Item image matcher for selected Drop items.
-3. Safe Drop worker.
-4. Use-item worker.
+1. Confirm Item Probe recognizes the intended item templates correctly.
+2. Add a decision layer: Drop / Use / Ignore.
+3. Safe Drop worker for one item, one account, one cycle.
+4. Expand Drop worker to all selected accounts.
 5. Sash worker.
 
 Each one should be added and tested separately.
