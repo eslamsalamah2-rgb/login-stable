@@ -7,13 +7,13 @@ import pydirectinput
 import win32gui
 from PIL import ImageDraw
 
+from tasks.post_login_modules.drop_confirmation import click_drop_yes_if_visible
 from tasks.post_login_modules.inventory_grid_probe import (
     detect_inventory_grid,
     draw_failure_debug,
 )
 from tasks.post_login_modules.inventory_item_probe import (
     DEFAULT_MATCH_THRESHOLD,
-    InventoryItemProbeResult,
     draw_item_debug,
     load_item_templates,
     probe_items,
@@ -33,16 +33,15 @@ class DropAction:
 class InventoryDropWorkerModule:
     """Drop matched items from the current account inventory.
 
-    This is the first real Drop stage, but it is intentionally limited:
+    Current safe real-drop stage:
       - current account only
       - only items matched from assets/drop_items
       - one item per account by default
-      - LoginPriorityGate and AutomationInputLock are owned by the runner before
-        this module runs
+      - drop target defaults to the top-right of the current game window
+      - confirms the Yes popup by matching assets/drop_confirm_yes.png
 
-    It uses the user's existing Conquer drop flow style: click the item slot,
-    then click a safe ground point away from the bag. The number of clicks is a
-    setting and defaults to double-click per point for the current test.
+    LoginPriorityGate and AutomationInputLock are owned by the runner before
+    this module runs.
     """
 
     name = "inventory_drop_worker"
@@ -116,10 +115,34 @@ class InventoryDropWorkerModule:
     def _click_delay(self):
         return self._float_setting("inventory_drop_click_delay", 0.12, minimum=0.02, maximum=1.0)
 
+    def _target_mode(self):
+        return str(self._setting("inventory_drop_target_mode", "top_right") or "top_right").strip().lower()
+
     def _target_fraction(self):
-        x = self._float_setting("inventory_drop_target_x_fraction", 0.50, minimum=0.05, maximum=0.90)
-        y = self._float_setting("inventory_drop_target_y_fraction", 0.45, minimum=0.05, maximum=0.85)
+        x = self._float_setting("inventory_drop_target_x_fraction", 0.50, minimum=0.05, maximum=0.98)
+        y = self._float_setting("inventory_drop_target_y_fraction", 0.45, minimum=0.03, maximum=0.90)
         return x, y
+
+    def _target_margins(self):
+        x = self._int_setting("inventory_drop_target_margin_x", 25, minimum=1, maximum=300)
+        y = self._int_setting("inventory_drop_target_margin_y", 55, minimum=1, maximum=300)
+        return x, y
+
+    def _confirm_enabled(self):
+        return self._feature_enabled("inventory_drop_confirm_yes_enabled", True)
+
+    def _confirm_strict(self):
+        return self._feature_enabled("inventory_drop_confirm_yes_strict", False)
+
+    def _confirm_threshold(self):
+        return self._float_setting("inventory_drop_confirm_yes_threshold", 0.78, minimum=0.10, maximum=0.99)
+
+    def _confirm_timeout(self):
+        return self._float_setting("inventory_drop_confirm_yes_timeout", 3.0, minimum=0.2, maximum=10.0)
+
+    def _confirm_template_paths(self):
+        value = self._setting("inventory_drop_confirm_yes_paths", "")
+        return str(value or "")
 
     def _save_debug_enabled(self):
         return self._feature_enabled("inventory_drop_save_debug_image", True)
@@ -154,6 +177,13 @@ class InventoryDropWorkerModule:
             height = max(1, bottom - top)
         except Exception:
             left, top, width, height = 0, 0, 1920, 1080
+            right = left + width
+            bottom = top + height
+
+        mode = self._target_mode()
+        if mode in {"top_right", "right_top", "upper_right"}:
+            margin_x, margin_y = self._target_margins()
+            return int(right - margin_x), int(top + margin_y)
 
         fx, fy = self._target_fraction()
         return int(left + width * fx), int(top + height * fy)
@@ -177,7 +207,6 @@ class InventoryDropWorkerModule:
 
         try:
             for action in actions:
-                # Convert screen point back to the captured image coordinate for the label if possible.
                 draw.rectangle(grid.slots[action.slot_index].box, outline=(255, 255, 0), width=4)
                 x1, y1, _, _ = grid.slots[action.slot_index].box
                 draw.text((x1 + 2, y1 + 18), "DROP", fill=(255, 255, 0))
@@ -186,7 +215,25 @@ class InventoryDropWorkerModule:
 
         return debug
 
-    def _execute_drop(self, action):
+    def _confirm_yes_if_needed(self, pid, hwnd):
+        if not self._confirm_enabled():
+            return True
+
+        confirmed = click_drop_yes_if_visible(
+            pid=pid,
+            hwnd=hwnd,
+            timeout=self._confirm_timeout(),
+            threshold=self._confirm_threshold(),
+            paths_text=self._confirm_template_paths(),
+        )
+        if confirmed:
+            print("Inventory drop confirm YES clicked")
+            return True
+
+        print("Inventory drop confirm YES was not clicked")
+        return not self._confirm_strict()
+
+    def _execute_drop(self, action, pid, hwnd):
         slot_x, slot_y = action.slot_screen
         target_x, target_y = action.target_screen
         clicks = self._clicks_per_point()
@@ -195,13 +242,14 @@ class InventoryDropWorkerModule:
             "Inventory drop executing - "
             f"slot={action.slot_index + 1} - item={action.item_name!r} - "
             f"score={action.score:.3f} - slot_xy={action.slot_screen} - "
-            f"target_xy={action.target_screen} - clicks={clicks}"
+            f"target_xy={action.target_screen} - target_mode={self._target_mode()} - clicks={clicks}"
         )
 
         self._click_point(slot_x, slot_y, clicks)
         time.sleep(self._click_delay())
         self._click_point(target_x, target_y, clicks)
-        time.sleep(0.25)
+        time.sleep(0.20)
+        return self._confirm_yes_if_needed(pid, hwnd)
 
     def run(self, account_index, session):
         if not self.enabled():
@@ -271,7 +319,8 @@ class InventoryDropWorkerModule:
 
         dropped = 0
         for action in actions:
-            self._execute_drop(action)
+            if not self._execute_drop(action, pid, hwnd):
+                return "INVENTORY_DROP_CONFIRM_YES_FAILED"
             dropped += 1
 
         try:
