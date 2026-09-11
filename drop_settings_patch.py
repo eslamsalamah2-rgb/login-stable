@@ -3,7 +3,7 @@
 The normal Settings window used to show every runtime key, including image
 thresholds/detection accuracy values.  This patch replaces the Settings window
 with a small grouped editor:
-- Login settings: only stable startup timings.
+- Login settings: only stable startup/retry timings.
 - Setting Drop: only timing/speed values that the user may tune while testing.
 
 Detection thresholds stay in code/settings.json internally, but they are hidden
@@ -18,17 +18,19 @@ from selection_launcher import SelectionAwareLauncher
 SETTINGS_GROUPS = (
     (
         "Login Settings - ثابت",
-        "أوقات تشغيل الدخول فقط. لا يوجد هنا أي دقة صور أو Threshold.",
+        "أوقات وتشغيل الدخول فقط. لا يوجد هنا أي دقة صور أو Threshold.",
         (
             ("start_game_timeout", "وقت البحث عن زر Start Game بالثواني"),
             ("new_pid_timeout", "وقت انتظار صفحة Conquer الجديدة بالثواني"),
             ("start_game_attempts", "عدد محاولات فتح اللانشر لو Start Game فشل"),
+            ("login_account_max_open_attempts", "عدد محاولات فتح/دخول الحساب قبل Skip"),
         ),
     ),
     (
         "Setting Drop",
-        "أوقات وسرعة الدروب فقط. عدّلها للتسريع أو التهدئة بدون لمس Login.",
+        "أوقات وسرعة أوامر الدخول بعد نجاح Login فقط. عدّلها بدون لمس Login.",
         (
+            ("post_login_account_budget_seconds", "مدة كل حساب في أوامر الدخول قبل الانتقال للتالي / ثانية"),
             ("inventory_open_wait_seconds", "انتظار بعد ضغط زر فتح الشنطة قبل التأكد"),
             ("inventory_drop_click_delay", "تأخير بين ضغطات الدروب داخل نفس النقطة"),
             ("inventory_drop_after_drop_delay", "انتظار بعد الرمية قبل البحث عن Yes / السكان التالي"),
@@ -92,7 +94,7 @@ def _add_entry_row(body, label_text, value):
     ctk.CTkLabel(
         row,
         text=label_text,
-        width=360,
+        width=380,
         anchor="w",
         font=("Segoe UI", 13),
     ).pack(side="left", padx=(8, 4), pady=7)
@@ -106,7 +108,7 @@ def _add_entry_row(body, label_text, value):
 def _open_clean_settings_window(self):
     window = ctk.CTkToplevel(self.app)
     window.title("Settings")
-    window.geometry("620x620")
+    window.geometry("650x650")
     window.transient(self.app)
     window.grab_set()
 
@@ -123,7 +125,7 @@ def _open_clean_settings_window(self):
         text_color="#cfcfcf",
     ).pack(pady=(0, 10))
 
-    body = ctk.CTkScrollableFrame(window, height=455)
+    body = ctk.CTkScrollableFrame(window, height=485)
     body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
 
     entries = {}
