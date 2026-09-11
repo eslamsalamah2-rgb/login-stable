@@ -27,7 +27,7 @@ _ORIGINAL_RUN_ACCOUNT_COMMANDS = PostLoginCommandRunner._run_account_commands
 
 
 MERGE_SETTING_DEFAULTS = {
-    "enable_inventory_probe": False,
+    "enable_inventory_probe": True,
     "inventory_probe_save_debug_image": True,
     "inventory_probe_debug_dir": "logs/inventory_probe",
 }
@@ -44,6 +44,9 @@ PROBE_TEST_PRESET = {
     "post_login_debug_only": False,
     "enable_inventory_probe": True,
     "inventory_probe_save_debug_image": True,
+    "inventory_probe_debug_dir": "logs/inventory_probe",
+    "post_login_account_delay_seconds": 2.0,
+    "post_login_round_delay_seconds": 5.0,
 }
 
 
@@ -57,21 +60,28 @@ def _install_merge_settings():
             pass
 
 
-def _apply_inventory_probe_test_preset(self):
-    """One-click setup for the first real merge test.
+def _apply_inventory_probe_settings(self, reason="startup", start_runner=False):
+    """Prepare the program for the current InventoryProbe test automatically.
 
-    This avoids asking the user to hunt for raw setting names. It switches out
-    of background Test Mode and enables only the safe InventoryProbe module.
+    This is intentionally temporary for the merge test stage. It forces the
+    safe probe settings even if settings.json still contains the old background
+    test values from another machine.
     """
     try:
         self.runtime_settings.update(PROBE_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
-        print(f"Inventory Probe test preset applied: {PROBE_TEST_PRESET}")
-        self.set_status("تم تجهيز اختبار InventoryProbe - تشغيل Capture للحساب الحالي فقط")
+        print(
+            "Inventory Probe test preset applied - "
+            f"reason={reason} - values={PROBE_TEST_PRESET}"
+        )
+        self.set_status("اختبار InventoryProbe جاهز تلقائيًا - شغّل الحسابات ثم اضغط 8")
     except Exception as error:
         print(f"Inventory Probe preset failed: {error}")
         self.set_status("فشل تجهيز اختبار InventoryProbe")
+        return
+
+    if not start_runner:
         return
 
     runner = getattr(self, "post_login_runner", None)
@@ -83,6 +93,14 @@ def _apply_inventory_probe_test_preset(self):
         self.app.after(300, lambda: runner.start_if_ready("inventory_probe_test_button"))
     except Exception as error:
         print(f"Could not start Inventory Probe test: {error}")
+
+
+def _apply_inventory_probe_test_preset(self):
+    _apply_inventory_probe_settings(
+        self,
+        reason="probe_test_button",
+        start_runner=True,
+    )
 
 
 def _add_inventory_probe_test_button(self):
@@ -105,6 +123,20 @@ def _add_inventory_probe_test_button(self):
 def _selection_init_with_probe_button(self):
     _ORIGINAL_SELECTION_INIT(self)
     _add_inventory_probe_test_button(self)
+
+    # Force the current test settings on startup so the user does not need to
+    # edit Settings or settings.json manually.
+    try:
+        self.app.after(
+            200,
+            lambda: _apply_inventory_probe_settings(
+                self,
+                reason="auto_startup_for_current_test",
+                start_runner=False,
+            ),
+        )
+    except Exception as error:
+        print(f"Could not auto-apply Inventory Probe settings: {error}")
 
 
 def _has_enabled_work_module_with_merge(self):
