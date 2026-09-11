@@ -6,6 +6,10 @@ import cv2
 import numpy as np
 from PIL import ImageDraw, ImageStat
 
+from tasks.post_login_modules.inventory_anchor import (
+    find_inventory_anchor,
+    grid_lines_from_anchor,
+)
 from tasks.post_login_modules.window_capture import capture_pid_window
 
 
@@ -19,9 +23,7 @@ TOP_AXIS_CANDIDATES = 80
 TOP_PER_CELL_SIZE = 6
 CELL_ASPECT_TOLERANCE = 6
 
-# The bag keeps almost the same physical UI size. It normally lives on the
-# right side of the game window. We search there first with a fixed slot-size
-# range instead of scaling from 1920x1080.
+# Fallback only. The main path is image-anchor detection from the bag itself.
 RIGHT_SEARCH_START_FRACTION = 0.55
 FIXED_MIN_CELL = 36
 FIXED_MAX_CELL = 52
@@ -45,6 +47,8 @@ class InventoryGridProbeResult:
     cell_width: int
     cell_height: int
     score: float
+    method: str = "unknown"
+    anchor_box: tuple[int, int, int, int] | None = None
 
     @property
     def filled_count(self):
@@ -53,11 +57,6 @@ class InventoryGridProbeResult:
     @property
     def empty_count(self):
         return sum(1 for slot in self.slots if not slot.filled)
-
-
-def _cell_size_range(width, height):
-    """The inventory UI size is effectively fixed, not screen-scaled."""
-    return FIXED_MIN_CELL, FIXED_MAX_CELL
 
 
 def _edge_binary(image):
@@ -173,12 +172,16 @@ def _grid_score(integral, x0, cell_w, y0, cell_h):
     return float(vertical + horizontal) / float(normalizer)
 
 
-def _find_grid_geometry_in_region(edge_binary, offset_x=0, offset_y=0):
-    height, width = edge_binary.shape[:2]
-    min_cell, max_cell = _cell_size_range(width, height)
+def _find_grid_geometry_fallback(image):
+    width, height = image.size
+    edge_binary = _edge_binary(image)
+    right_start = int(round(width * RIGHT_SEARCH_START_FRACTION))
+    right_edges = edge_binary[:, right_start:]
 
-    vertical_score = _band_projection(edge_binary, "x")
-    horizontal_score = _band_projection(edge_binary, "y")
+    min_cell, max_cell = FIXED_MIN_CELL, FIXED_MAX_CELL
+
+    vertical_score = _band_projection(right_edges, "x")
+    horizontal_score = _band_projection(right_edges, "y")
 
     x_candidates = _sequence_candidates(
         vertical_score,
@@ -201,7 +204,8 @@ def _find_grid_geometry_in_region(edge_binary, offset_x=0, offset_y=0):
     integral = _integral(edge_binary)
     best = None
 
-    for _, x0, cell_w in x_candidates:
+    for _, x0_roi, cell_w in x_candidates:
+        x0 = x0_roi + right_start
         for _, y0, cell_h in y_candidates:
             if abs(cell_w - cell_h) > CELL_ASPECT_TOLERANCE:
                 continue
@@ -215,32 +219,16 @@ def _find_grid_geometry_in_region(edge_binary, offset_x=0, offset_y=0):
 
     score, x0, cell_w, y0, cell_h = best
     if score < MIN_GRID_SCORE:
+        print(
+            "Inventory grid fallback failed: dynamic grid score too low - "
+            f"score={score:.3f} min={MIN_GRID_SCORE:.3f}"
+        )
         return None
 
-    x_lines = [int(round(offset_x + x0 + col * cell_w)) for col in range(GRID_COLS + 1)]
-    y_lines = [int(round(offset_y + y0 + row * cell_h)) for row in range(GRID_ROWS + 1)]
+    x_lines = [int(round(x0 + col * cell_w)) for col in range(GRID_COLS + 1)]
+    y_lines = [int(round(y0 + row * cell_h)) for row in range(GRID_ROWS + 1)]
 
-    return x_lines, y_lines, int(cell_w), int(cell_h), float(score)
-
-
-def _find_grid_geometry(image):
-    """Find the inventory grid without tying it to a screen resolution.
-
-    First search the right side because the bag is normally docked there. If it
-    is not found, fall back to the full window. This uses fixed UI cell sizes
-    instead of 1920x1080 ratios.
-    """
-    width, height = image.size
-
-    right_start = int(round(width * RIGHT_SEARCH_START_FRACTION))
-    right_crop = image.crop((right_start, 0, width, height))
-    right_edges = _edge_binary(right_crop)
-    geometry = _find_grid_geometry_in_region(right_edges, offset_x=right_start, offset_y=0)
-    if geometry is not None:
-        return geometry
-
-    full_edges = _edge_binary(image)
-    return _find_grid_geometry_in_region(full_edges, offset_x=0, offset_y=0)
+    return x_lines, y_lines, int(cell_w), int(cell_h), float(score), "dynamic_fallback", None
 
 
 def _slot_stats(image, box):
@@ -263,18 +251,7 @@ def _slot_stats(image, box):
     return mean, stddev
 
 
-def detect_inventory_grid(image):
-    """Detect the visible 5x8 inventory grid in the captured game window."""
-    width, height = image.size
-    if width < 320 or height < 320:
-        return None
-
-    geometry = _find_grid_geometry(image)
-    if geometry is None:
-        return None
-
-    x_lines, y_lines, cell_w, cell_h, score = geometry
-
+def _build_result_from_lines(image, x_lines, y_lines, cell_w, cell_h, score, method, anchor_box=None):
     slots = []
     index = 0
     for row in range(GRID_ROWS):
@@ -301,15 +278,67 @@ def detect_inventory_grid(image):
     return InventoryGridProbeResult(
         box=(x_lines[0], y_lines[0], x_lines[-1], y_lines[-1]),
         slots=slots,
-        cell_width=cell_w,
-        cell_height=cell_h,
+        cell_width=int(cell_w),
+        cell_height=int(cell_h),
+        score=float(score),
+        method=str(method),
+        anchor_box=anchor_box,
+    )
+
+
+def detect_inventory_grid(image):
+    """Detect the open bag by image anchor, then return the 5x8 slot grid.
+
+    Primary path:
+      - find the real embedded "Tidy" button image on the right side
+      - compute the fixed-size grid relative to that anchor
+
+    Fallback:
+      - if the anchor is not found, try the older line-grid detector.
+    """
+    width, height = image.size
+    if width < 320 or height < 320:
+        return None
+
+    anchor = find_inventory_anchor(image)
+    if anchor is not None:
+        x_lines, y_lines = grid_lines_from_anchor(anchor)
+        return _build_result_from_lines(
+            image=image,
+            x_lines=x_lines,
+            y_lines=y_lines,
+            cell_w=anchor.cell_width,
+            cell_h=anchor.cell_height,
+            score=anchor.score,
+            method=f"anchor:{anchor.name}",
+            anchor_box=anchor.anchor_box,
+        )
+
+    geometry = _find_grid_geometry_fallback(image)
+    if geometry is None:
+        return None
+
+    x_lines, y_lines, cell_w, cell_h, score, method, anchor_box = geometry
+    return _build_result_from_lines(
+        image=image,
+        x_lines=x_lines,
+        y_lines=y_lines,
+        cell_w=cell_w,
+        cell_h=cell_h,
         score=score,
+        method=method,
+        anchor_box=anchor_box,
     )
 
 
 def draw_grid_debug(image, result):
     debug = image.copy()
     draw = ImageDraw.Draw(debug)
+
+    if result.anchor_box is not None:
+        draw.rectangle(result.anchor_box, outline=(255, 215, 0), width=3)
+        x1, y1, _, _ = result.anchor_box
+        draw.text((x1 + 3, y1 - 14 if y1 >= 16 else y1 + 32), "ANCHOR", fill=(255, 215, 0))
 
     draw.rectangle(result.box, outline=(255, 215, 0), width=3)
 
@@ -328,7 +357,7 @@ def draw_failure_debug(image):
     width, height = image.size
     right_start = int(round(width * RIGHT_SEARCH_START_FRACTION))
     draw.rectangle((right_start, 0, width - 1, height - 1), outline=(255, 215, 0), width=3)
-    draw.text((right_start + 10, 10), "GRID NOT FOUND - right-side search area", fill=(255, 215, 0))
+    draw.text((right_start + 10, 10), "BAG ANCHOR / GRID NOT FOUND - right-side search area", fill=(255, 215, 0))
     return debug
 
 
@@ -336,8 +365,8 @@ class InventoryGridProbeModule:
     """Detect and draw the inventory slot grid for the current account only.
 
     Safe test stage: it captures the current account PID, saves debug evidence,
-    and tries to locate the 5x8 bag grid. It never clicks, types, moves, drops,
-    or uses items.
+    and locates the 5x8 bag grid using a real image anchor when possible. It
+    never clicks, types, moves, drops, or uses items.
     """
 
     name = "inventory_grid_probe"
@@ -402,9 +431,6 @@ class InventoryGridProbeModule:
         if image is None:
             return "INVENTORY_GRID_PROBE_CAPTURE_FAILED"
 
-        # Always save a raw captured image in this test stage. This prevents a
-        # failed grid detector from leaving the user with no evidence and keeps
-        # the runner moving to the next account.
         if self._save_debug_enabled():
             try:
                 self._save_image(image, "raw", account_index, pid)
@@ -417,27 +443,27 @@ class InventoryGridProbeModule:
         result = detect_inventory_grid(image)
         if result is None:
             print(
-                "Inventory grid probe did not find grid - "
+                "Inventory grid probe did not find inventory - "
                 f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - "
                 f"name={page_name!r} - image={image.size[0]}x{image.size[1]}"
             )
             if self._save_debug_enabled():
                 try:
-                    self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
+                    self._save_image(draw_failure_debug(image), "inventory_not_found", account_index, pid)
                 except Exception as error:
                     print(
                         "Inventory grid probe failure debug save failed - "
                         f"account={account_index + 1} - pid={pid} - {error}"
                     )
 
-            # Do not block account rotation during this visual probe stage.
             return "OK"
 
         print(
             "Inventory grid probe OK - "
             f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - "
             f"name={page_name!r} - image={image.size[0]}x{image.size[1]} - "
-            f"grid={result.box} - cell={result.cell_width}x{result.cell_height} - "
+            f"method={result.method} - grid={result.box} - "
+            f"cell={result.cell_width}x{result.cell_height} - "
             f"score={result.score:.3f} - filled={result.filled_count} - empty={result.empty_count}"
         )
 
