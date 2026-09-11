@@ -14,6 +14,7 @@ import sash_items_patch
 import sash_next_page_patch
 import post_sash_final_actions_patch
 import item_selection_patch
+import compact_item_selector_ui_patch
 import input_speed_patch
 import login_stability_patch
 import invalid_account_id_wait_patch
