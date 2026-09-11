@@ -19,6 +19,7 @@ import ui_controls_settings_patch
 import settings_onoff_close_patch
 import top_header_controls_patch
 import startup_scan_visible_patch
+import hide_bottom_start_stop_patch
 import input_speed_patch
 import login_stability_patch
 import invalid_account_id_wait_patch
