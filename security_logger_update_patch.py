@@ -1,12 +1,19 @@
-"""Handle the 99 Security Logger update dialog before Start Game.
+"""Core Login guard for the 99 Security Logger update dialog.
 
-The dialog can appear after opening the game file and before the Start Game
-button is available:
+This dialog is part of the Login/opening sequence, not a post-login module.
+When it appears, the current run is unsafe because the game client/update state
+has changed.  The correct recovery is:
+  1. press OK on the 99 Security Logger dialog,
+  2. close any open conquer.exe pages,
+  3. return CLIENT_UPDATE so the main Login loop resets sessions and starts
+     again from account 1 through the existing update recovery path.
 
+Dialog text:
     The game client is still running. Exit the client and try to update again?
 
-This patch is intentionally pre-login only.  It does not touch the stable Login
-input flow or any post-login Drop/Use/Sash workers.
+The dialog may be visible on the desktop, behind other windows, or only present
+as a taskbar/dialog window.  Detection is therefore done by enumerating all top
+level Windows dialogs and their child controls.
 """
 
 import time
@@ -17,8 +24,6 @@ import win32gui
 from maintenance_launcher import MaintenanceAwareLauncher
 from tasks.memory_reader import ConquerMemoryReader
 
-
-_ORIGINAL_OPEN_CONQUER_PID_WITH_RETRIES = MaintenanceAwareLauncher._open_conquer_pid_with_retries
 
 SECURITY_LOGGER_TITLE = "99 Security Logger"
 SECURITY_LOGGER_TEXT_PARTS = (
@@ -137,7 +142,7 @@ def find_security_logger_update_dialog():
 
 
 def handle_security_logger_update_dialog(reason="scan", timeout=0.80):
-    """Return True if the update dialog was found and OK was pressed."""
+    """Return True if the Login update dialog was found and OK was pressed."""
     end = time.time() + max(0.0, float(timeout))
     first = True
 
@@ -146,13 +151,15 @@ def handle_security_logger_update_dialog(reason="scan", timeout=0.80):
         hwnd = find_security_logger_update_dialog()
         if hwnd:
             print(
-                "99 Security Logger update dialog detected - "
-                f"reason={reason} - hwnd={hwnd} - pressing OK"
+                "LOGIN_UPDATE_DIALOG detected - "
+                "type=99_security_logger - action=press_ok_and_restart_login - "
+                f"reason={reason} - hwnd={hwnd}"
             )
             clicked = _click_ok_on_dialog(hwnd)
             time.sleep(0.30)
             print(
-                "99 Security Logger update dialog handled - "
+                "LOGIN_UPDATE_DIALOG handled - "
+                "type=99_security_logger - result=CLIENT_UPDATE - "
                 f"clicked_ok={clicked} - reason={reason}"
             )
             return True
@@ -161,7 +168,20 @@ def handle_security_logger_update_dialog(reason="scan", timeout=0.80):
     return False
 
 
-def _open_conquer_pid_with_security_logger_guard(self, path, account_number, total_accounts):
+def _login_update_restart(self, reason):
+    """Close all game pages and tell the Login loop to restart from account 1."""
+    self.set_status("Login Update: 99 Security Logger - إغلاق كل الصفحات والبدء من الحساب الأول")
+    closed_count = ConquerMemoryReader.terminate_all_conquer()
+    self._stop_launcher_only()
+    print(
+        "LOGIN_UPDATE_DIALOG restart requested - "
+        "type=99_security_logger - result=CLIENT_UPDATE - "
+        f"reason={reason} - closed_conquer={closed_count}"
+    )
+    return None, "CLIENT_UPDATE"
+
+
+def _open_conquer_pid_with_login_update_guard(self, path, account_number, total_accounts):
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
@@ -169,14 +189,7 @@ def _open_conquer_pid_with_security_logger_guard(self, path, account_number, tot
             reason=f"before_launcher_attempt_{attempt}",
             timeout=0.20,
         ):
-            self.set_status("تم اكتشاف 99 Security Logger Update - جاري إغلاق صفحات Conquer وإعادة المحاولة")
-            closed_count = ConquerMemoryReader.terminate_all_conquer()
-            self._stop_launcher_only()
-            print(
-                "99 Security Logger update before launcher - "
-                f"closed {closed_count} conquer.exe process(es)"
-            )
-            return None, "CLIENT_UPDATE"
+            return _login_update_restart(self, f"before_launcher_attempt_{attempt}")
 
         previous_conquer_pids = ConquerMemoryReader.list_conquer_pids()
 
@@ -189,22 +202,13 @@ def _open_conquer_pid_with_security_logger_guard(self, path, account_number, tot
         if not success:
             return None, "OPEN_ERROR"
 
-        # The update dialog normally appears right after opening the game file,
-        # before Start Game can be found.  We look for it globally because it can
-        # be behind other windows or only visible from the taskbar.
+        # This is a core Login/startup dialog. It normally appears right after
+        # opening the game file and before Start Game can be found.
         if handle_security_logger_update_dialog(
             reason=f"after_launcher_open_attempt_{attempt}",
             timeout=1.20,
         ):
-            self.set_status("تم اكتشاف 99 Security Logger Update قبل Start Game - جاري إعادة المحاولة")
-            closed_count = ConquerMemoryReader.terminate_all_conquer()
-            self._stop_launcher_only()
-            print(
-                "99 Security Logger update after launcher open - "
-                f"attempt={attempt}/{max_attempts} - "
-                f"closed {closed_count} conquer.exe process(es)"
-            )
-            return None, "CLIENT_UPDATE"
+            return _login_update_restart(self, f"after_launcher_open_attempt_{attempt}")
 
         time.sleep(0.50)
 
@@ -224,15 +228,7 @@ def _open_conquer_pid_with_security_logger_guard(self, path, account_number, tot
             reason=f"after_start_game_search_attempt_{attempt}",
             timeout=0.20,
         ):
-            self.set_status("تم اكتشاف 99 Security Logger Update أثناء Start Game - جاري إعادة المحاولة")
-            closed_count = ConquerMemoryReader.terminate_all_conquer()
-            self._stop_launcher_only()
-            print(
-                "99 Security Logger update during Start Game search - "
-                f"attempt={attempt}/{max_attempts} - "
-                f"closed {closed_count} conquer.exe process(es)"
-            )
-            return None, "CLIENT_UPDATE"
+            return _login_update_restart(self, f"after_start_game_search_attempt_{attempt}")
 
         if not found:
             print(
@@ -268,8 +264,8 @@ def _open_conquer_pid_with_security_logger_guard(self, path, account_number, tot
 
 
 def apply_security_logger_update_patch():
-    MaintenanceAwareLauncher._open_conquer_pid_with_retries = _open_conquer_pid_with_security_logger_guard
-    print("99 Security Logger update patch active: global dialog OK before Start Game")
+    MaintenanceAwareLauncher._open_conquer_pid_with_retries = _open_conquer_pid_with_login_update_guard
+    print("Login update dialog patch active: 99 Security Logger is core Login recovery")
 
 
 apply_security_logger_update_patch()
