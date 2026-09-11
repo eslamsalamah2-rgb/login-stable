@@ -34,9 +34,8 @@ tasks/post_login_modules/inventory_probe.py
 
 Purpose:
 
-- first safe merge piece
 - captures the exact current account window by PID
-- optionally saves a debug image
+- optionally saves a full debug image
 - does not click
 - does not type
 - does not drop/use items
@@ -50,9 +49,49 @@ inventory_probe_save_debug_image = true
 inventory_probe_debug_dir = logs/inventory_probe
 ```
 
+### InventoryGridProbeModule
+
+File:
+
+```text
+tasks/post_login_modules/inventory_grid_probe.py
+```
+
+Purpose:
+
+- second safe merge piece
+- captures the exact current account window by PID
+- locates the 5 columns x 8 rows inventory grid using the current calibrated layout
+- saves an annotated debug image with boxes around the 40 slots
+- gives a rough filled/empty count for logging
+- does not click
+- does not type
+- does not drop/use items
+
+Settings:
+
+```text
+enable_inventory_grid_probe = true
+inventory_grid_probe_save_debug_image = true
+inventory_grid_probe_debug_dir = logs/inventory_grid_probe
+```
+
+Expected debug folder:
+
+```text
+logs/inventory_grid_probe
+```
+
+Expected log lines:
+
+```text
+Inventory grid probe OK
+Inventory grid probe debug image saved
+```
+
 ## Next intended modules
 
-1. Inventory grid detector for current PID window.
+1. Confirm InventoryGridProbe boxes match the real slots on the user's screen.
 2. Item image matcher for selected Drop items.
 3. Safe Drop worker.
 4. Use-item worker.
