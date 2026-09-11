@@ -5,6 +5,7 @@ import existing_pages_settings_patch  # adds Scan Open, side panel, and editable
 import pre_merge_safety_patch  # logging, backups, input lock, feature flags, rollback prep
 import post_login_commands_patch  # starts safe post-login command loop after READY accounts
 import post_login_module_merge_patch  # safe modular worker hook for future Drop/Use/Sash merge
+import account_options_patch  # per-account saved Rev/Rev Here/Sash options
 import drop_settings_patch  # clean Settings window: Setting Drop timings only, no thresholds
 import input_speed_patch  # keeps Login typing protected while Drop/Yes mouse stays fast only locally
 import login_stability_patch  # global stop, Invalid Account ID retry/skip, duplicate username skip
