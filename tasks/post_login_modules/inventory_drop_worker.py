@@ -33,12 +33,12 @@ class DropAction:
 class InventoryDropWorkerModule:
     """Drop matched items from the current account inventory.
 
-    Current safe real-drop stage:
+    Current real-drop stage:
       - current account only
       - only items matched from assets/drop_items
-      - one item per account by default
+      - limited number of items per account
       - drop target defaults to the top-right of the current game window
-      - confirms the Yes popup by matching assets/drop_confirm_yes.png
+      - confirms the Yes popup by image matching near the bag first
 
     LoginPriorityGate and AutomationInputLock are owned by the runner before
     this module runs.
@@ -135,7 +135,7 @@ class InventoryDropWorkerModule:
         return self._feature_enabled("inventory_drop_confirm_yes_strict", False)
 
     def _confirm_threshold(self):
-        return self._float_setting("inventory_drop_confirm_yes_threshold", 0.78, minimum=0.10, maximum=0.99)
+        return self._float_setting("inventory_drop_confirm_yes_threshold", 0.76, minimum=0.10, maximum=0.99)
 
     def _confirm_timeout(self):
         return self._float_setting("inventory_drop_confirm_yes_timeout", 3.0, minimum=0.2, maximum=10.0)
@@ -215,16 +215,18 @@ class InventoryDropWorkerModule:
 
         return debug
 
-    def _confirm_yes_if_needed(self, pid, hwnd):
+    def _confirm_yes_if_needed(self, pid, hwnd, grid):
         if not self._confirm_enabled():
             return True
 
+        around_box = getattr(grid, "box", None)
         confirmed = click_drop_yes_if_visible(
             pid=pid,
             hwnd=hwnd,
             timeout=self._confirm_timeout(),
             threshold=self._confirm_threshold(),
             paths_text=self._confirm_template_paths(),
+            around_box=around_box,
         )
         if confirmed:
             print("Inventory drop confirm YES clicked")
@@ -233,7 +235,7 @@ class InventoryDropWorkerModule:
         print("Inventory drop confirm YES was not clicked")
         return not self._confirm_strict()
 
-    def _execute_drop(self, action, pid, hwnd):
+    def _execute_drop(self, action, pid, hwnd, grid):
         slot_x, slot_y = action.slot_screen
         target_x, target_y = action.target_screen
         clicks = self._clicks_per_point()
@@ -249,7 +251,7 @@ class InventoryDropWorkerModule:
         time.sleep(self._click_delay())
         self._click_point(target_x, target_y, clicks)
         time.sleep(0.20)
-        return self._confirm_yes_if_needed(pid, hwnd)
+        return self._confirm_yes_if_needed(pid, hwnd, grid)
 
     def run(self, account_index, session):
         if not self.enabled():
@@ -319,7 +321,7 @@ class InventoryDropWorkerModule:
 
         dropped = 0
         for action in actions:
-            if not self._execute_drop(action, pid, hwnd):
+            if not self._execute_drop(action, pid, hwnd, grid):
                 return "INVENTORY_DROP_CONFIRM_YES_FAILED"
             dropped += 1
 
