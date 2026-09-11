@@ -45,6 +45,16 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_item_match_threshold": 0.72,
     "inventory_item_probe_save_debug_image": True,
     "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
+    "enable_inventory_drop_worker": True,
+    "inventory_drop_templates_dir": "assets/drop_items",
+    "inventory_drop_match_threshold": 0.78,
+    "inventory_drop_max_items_per_account": 1,
+    "inventory_drop_clicks_per_point": 2,
+    "inventory_drop_click_delay": 0.12,
+    "inventory_drop_target_x_fraction": 0.50,
+    "inventory_drop_target_y_fraction": 0.45,
+    "inventory_drop_save_debug_image": True,
+    "inventory_drop_debug_dir": "logs/inventory_drop_worker",
 }
 
 MERGE_SETTING_LABELS = {
@@ -66,10 +76,20 @@ MERGE_SETTING_LABELS = {
     "inventory_item_match_threshold": "inventory_item_match_threshold | حساسية مطابقة صور العناصر",
     "inventory_item_probe_save_debug_image": "inventory_item_probe_save_debug_image | حفظ صورة Debug لمطابقة العناصر",
     "inventory_item_probe_debug_dir": "inventory_item_probe_debug_dir | مجلد صور Debug للعناصر",
+    "enable_inventory_drop_worker": "enable_inventory_drop_worker | Drop Test - رمي العناصر المطابقة",
+    "inventory_drop_templates_dir": "inventory_drop_templates_dir | مجلد صور عناصر الدروب",
+    "inventory_drop_match_threshold": "inventory_drop_match_threshold | حساسية الدروب - أعلى أمانًا",
+    "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | أقصى عدد عناصر يتم رميها لكل حساب في الدورة",
+    "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي",
+    "inventory_drop_click_delay": "inventory_drop_click_delay | التأخير بين ضغطات الدروب/ثانية",
+    "inventory_drop_target_x_fraction": "inventory_drop_target_x_fraction | مكان الرمي أفقيًا كنسبة من عرض النافذة",
+    "inventory_drop_target_y_fraction": "inventory_drop_target_y_fraction | مكان الرمي رأسيًا كنسبة من ارتفاع النافذة",
+    "inventory_drop_save_debug_image": "inventory_drop_save_debug_image | حفظ صور Debug قبل/بعد الدروب",
+    "inventory_drop_debug_dir": "inventory_drop_debug_dir | مجلد صور Debug للدروب",
 }
 
 
-ITEM_TEST_PRESET = {
+DROP_TEST_PRESET = {
     "enable_post_login_commands": True,
     "post_login_debug_only": False,
     "enable_inventory_probe": False,
@@ -88,6 +108,16 @@ ITEM_TEST_PRESET = {
     "inventory_item_match_threshold": 0.72,
     "inventory_item_probe_save_debug_image": True,
     "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
+    "enable_inventory_drop_worker": True,
+    "inventory_drop_templates_dir": "assets/drop_items",
+    "inventory_drop_match_threshold": 0.78,
+    "inventory_drop_max_items_per_account": 1,
+    "inventory_drop_clicks_per_point": 2,
+    "inventory_drop_click_delay": 0.12,
+    "inventory_drop_target_x_fraction": 0.50,
+    "inventory_drop_target_y_fraction": 0.45,
+    "inventory_drop_save_debug_image": True,
+    "inventory_drop_debug_dir": "logs/inventory_drop_worker",
     "post_login_account_delay_seconds": 2.0,
     "post_login_round_delay_seconds": 5.0,
 }
@@ -104,24 +134,24 @@ def _install_merge_settings():
 
 
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
-    """Prepare the program for the current open/grid/item probe test.
+    """Prepare the program for the current open/grid/item/drop test.
 
     This is intentionally temporary for the merge test stage. It forces the
-    safe inventory-open + grid + item-probe settings even if settings.json still
-    contains older values from another machine.
+    safe inventory-open + grid + item-probe + limited-drop settings even if
+    settings.json still contains older values from another machine.
     """
     try:
-        self.runtime_settings.update(ITEM_TEST_PRESET)
+        self.runtime_settings.update(DROP_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Open/Grid/Item test preset applied - "
-            f"reason={reason} - values={ITEM_TEST_PRESET}"
+            "Inventory Open/Grid/Item/Drop test preset applied - "
+            f"reason={reason} - values={DROP_TEST_PRESET}"
         )
-        self.set_status("اختبار الشنطة/Grid/Items جاهز - ضع صور العناصر ثم اضغط 8")
+        self.set_status("اختبار Drop جاهز: يرمي عنصر واحد مطابق لكل حساب في الدورة")
     except Exception as error:
-        print(f"Inventory Open/Grid/Item preset failed: {error}")
-        self.set_status("فشل تجهيز اختبار الشنطة/Grid/Items")
+        print(f"Inventory Drop preset failed: {error}")
+        self.set_status("فشل تجهيز اختبار Drop")
         return
 
     if not start_runner:
@@ -129,19 +159,19 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 
     runner = getattr(self, "post_login_runner", None)
     if runner is None:
-        self.set_status("اختبار العناصر جاهز، لكن أوامر الدخول غير جاهزة")
+        self.set_status("اختبار Drop جاهز، لكن أوامر الدخول غير جاهزة")
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_open_grid_item_test_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_drop_test_button"))
     except Exception as error:
-        print(f"Could not start Inventory Open/Grid/Item test: {error}")
+        print(f"Could not start Inventory Drop test: {error}")
 
 
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="open_grid_item_test_button",
+        reason="drop_test_button",
         start_runner=True,
     )
 
@@ -151,8 +181,8 @@ def _add_inventory_probe_test_button(self):
         controls = self.resume_button.master
         self.inventory_probe_test_button = ctk.CTkButton(
             controls,
-            text="Bag/Item Test",
-            width=130,
+            text="Drop Test",
+            width=115,
             height=40,
             fg_color="#6b4f00",
             hover_color="#806000",
@@ -160,7 +190,7 @@ def _add_inventory_probe_test_button(self):
         )
         self.inventory_probe_test_button.pack(side="left", padx=6, pady=10)
     except Exception as error:
-        print(f"Could not add Inventory Open/Grid/Item test button: {error}")
+        print(f"Could not add Inventory Drop test button: {error}")
 
 
 def _selection_init_with_probe_button(self):
@@ -179,7 +209,7 @@ def _selection_init_with_probe_button(self):
             ),
         )
     except Exception as error:
-        print(f"Could not auto-apply Inventory Open/Grid/Item settings: {error}")
+        print(f"Could not auto-apply Inventory Drop settings: {error}")
 
 
 def _has_enabled_work_module_with_merge(self):
