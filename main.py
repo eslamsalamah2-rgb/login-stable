@@ -22,6 +22,7 @@ import startup_scan_visible_patch
 import hide_bottom_start_stop_patch
 import input_speed_patch
 import login_input_settings_patch
+import login_username_arrow_patch
 import login_stability_patch
 import invalid_account_id_wait_patch
 import account_retry_limit_patch
