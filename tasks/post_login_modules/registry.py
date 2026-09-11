@@ -2,6 +2,7 @@ from tasks.post_login_modules.inventory_probe import InventoryProbeModule
 from tasks.post_login_modules.inventory_ensure_open import InventoryEnsureOpenModule
 from tasks.post_login_modules.inventory_grid_probe import InventoryGridProbeModule
 from tasks.post_login_modules.inventory_item_probe import InventoryItemProbeModule
+from tasks.post_login_modules.inventory_drop_worker import InventoryDropWorkerModule
 
 
 MODULE_CLASSES = (
@@ -9,6 +10,7 @@ MODULE_CLASSES = (
     InventoryEnsureOpenModule,
     InventoryGridProbeModule,
     InventoryItemProbeModule,
+    InventoryDropWorkerModule,
 )
 
 
