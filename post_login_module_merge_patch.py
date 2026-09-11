@@ -40,6 +40,11 @@ MERGE_SETTING_DEFAULTS = {
     "enable_inventory_grid_probe": True,
     "inventory_grid_probe_save_debug_image": True,
     "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
+    "enable_inventory_item_probe": True,
+    "inventory_item_templates_dir": "assets/drop_items",
+    "inventory_item_match_threshold": 0.72,
+    "inventory_item_probe_save_debug_image": True,
+    "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
 }
 
 MERGE_SETTING_LABELS = {
@@ -56,10 +61,15 @@ MERGE_SETTING_LABELS = {
     "enable_inventory_grid_probe": "enable_inventory_grid_probe | Grid Probe - تحديد خانات الشنطة 5x8",
     "inventory_grid_probe_save_debug_image": "inventory_grid_probe_save_debug_image | Grid Probe - حفظ صورة عليها مربعات الخانات",
     "inventory_grid_probe_debug_dir": "inventory_grid_probe_debug_dir | Grid Probe - مجلد صور الخانات",
+    "enable_inventory_item_probe": "enable_inventory_item_probe | Item Probe - التعرف على العناصر من صور assets/drop_items",
+    "inventory_item_templates_dir": "inventory_item_templates_dir | مجلد صور العناصر المطلوب التعرف عليها",
+    "inventory_item_match_threshold": "inventory_item_match_threshold | حساسية مطابقة صور العناصر",
+    "inventory_item_probe_save_debug_image": "inventory_item_probe_save_debug_image | حفظ صورة Debug لمطابقة العناصر",
+    "inventory_item_probe_debug_dir": "inventory_item_probe_debug_dir | مجلد صور Debug للعناصر",
 }
 
 
-GRID_TEST_PRESET = {
+ITEM_TEST_PRESET = {
     "enable_post_login_commands": True,
     "post_login_debug_only": False,
     "enable_inventory_probe": False,
@@ -73,6 +83,11 @@ GRID_TEST_PRESET = {
     "enable_inventory_grid_probe": True,
     "inventory_grid_probe_save_debug_image": True,
     "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
+    "enable_inventory_item_probe": True,
+    "inventory_item_templates_dir": "assets/drop_items",
+    "inventory_item_match_threshold": 0.72,
+    "inventory_item_probe_save_debug_image": True,
+    "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
     "post_login_account_delay_seconds": 2.0,
     "post_login_round_delay_seconds": 5.0,
 }
@@ -89,24 +104,24 @@ def _install_merge_settings():
 
 
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
-    """Prepare the program for the current InventoryGridProbe test automatically.
+    """Prepare the program for the current open/grid/item probe test.
 
     This is intentionally temporary for the merge test stage. It forces the
-    safe inventory-open + grid-probe settings even if settings.json still
+    safe inventory-open + grid + item-probe settings even if settings.json still
     contains older values from another machine.
     """
     try:
-        self.runtime_settings.update(GRID_TEST_PRESET)
+        self.runtime_settings.update(ITEM_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Open/Grid test preset applied - "
-            f"reason={reason} - values={GRID_TEST_PRESET}"
+            "Inventory Open/Grid/Item test preset applied - "
+            f"reason={reason} - values={ITEM_TEST_PRESET}"
         )
-        self.set_status("اختبار فتح الشنطة/Grid جاهز تلقائيًا - شغّل الحسابات ثم اضغط 8")
+        self.set_status("اختبار الشنطة/Grid/Items جاهز - ضع صور العناصر ثم اضغط 8")
     except Exception as error:
-        print(f"Inventory Open/Grid preset failed: {error}")
-        self.set_status("فشل تجهيز اختبار فتح الشنطة/Grid")
+        print(f"Inventory Open/Grid/Item preset failed: {error}")
+        self.set_status("فشل تجهيز اختبار الشنطة/Grid/Items")
         return
 
     if not start_runner:
@@ -114,19 +129,19 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 
     runner = getattr(self, "post_login_runner", None)
     if runner is None:
-        self.set_status("اختبار الشنطة جاهز، لكن أوامر الدخول غير جاهزة")
+        self.set_status("اختبار العناصر جاهز، لكن أوامر الدخول غير جاهزة")
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_open_grid_test_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_open_grid_item_test_button"))
     except Exception as error:
-        print(f"Could not start Inventory Open/Grid test: {error}")
+        print(f"Could not start Inventory Open/Grid/Item test: {error}")
 
 
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="open_grid_test_button",
+        reason="open_grid_item_test_button",
         start_runner=True,
     )
 
@@ -136,8 +151,8 @@ def _add_inventory_probe_test_button(self):
         controls = self.resume_button.master
         self.inventory_probe_test_button = ctk.CTkButton(
             controls,
-            text="Bag/Grid Test",
-            width=125,
+            text="Bag/Item Test",
+            width=130,
             height=40,
             fg_color="#6b4f00",
             hover_color="#806000",
@@ -145,7 +160,7 @@ def _add_inventory_probe_test_button(self):
         )
         self.inventory_probe_test_button.pack(side="left", padx=6, pady=10)
     except Exception as error:
-        print(f"Could not add Inventory Open/Grid test button: {error}")
+        print(f"Could not add Inventory Open/Grid/Item test button: {error}")
 
 
 def _selection_init_with_probe_button(self):
@@ -164,7 +179,7 @@ def _selection_init_with_probe_button(self):
             ),
         )
     except Exception as error:
-        print(f"Could not auto-apply Inventory Open/Grid settings: {error}")
+        print(f"Could not auto-apply Inventory Open/Grid/Item settings: {error}")
 
 
 def _has_enabled_work_module_with_merge(self):
