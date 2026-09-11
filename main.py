@@ -9,6 +9,7 @@ import post_login_account_budget_patch  # 3-minute budget per account for stage-
 import account_options_patch  # per-account saved Rev/Rev Here/Sash options
 import drop_settings_patch  # clean Settings window: Setting Drop timings only, no thresholds
 import use_items_patch  # Use stage: scan assets/use_items after Drop and right-click matched items
+import sash_items_patch  # Sash stage: after Use, transfer marked items with Alt+Click
 import input_speed_patch  # keeps Login typing protected while Drop/Yes mouse stays fast only locally
 import login_stability_patch  # global stop, Invalid Account ID retry/skip, duplicate username skip
 import invalid_account_id_wait_patch  # wait for Invalid Account ID message to disappear before retyping
