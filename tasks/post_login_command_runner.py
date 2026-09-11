@@ -14,6 +14,12 @@ class PostLoginCommandRunner:
     Startup rule:
         all selected accounts must be READY before stage two starts.
 
+    Watcher rule:
+        if the user starts post-login work while health baselines are still
+        being learned, keep a watcher thread alive instead of returning once.
+        The watcher waits until all selected accounts are READY, then starts
+        stage two automatically.
+
     Loop rule:
         after stage two starts, check only the account whose turn is next.
         If that account is not READY, stay on it and let Login/Health recover it.
@@ -38,6 +44,7 @@ class PostLoginCommandRunner:
         self.problem_started_at = None
         self.last_wait_log_at = 0.0
         self.lock = threading.Lock()
+        self.start_gate_satisfied = False
 
     # ------------------------------------------------------------------
     # Settings helpers
@@ -139,20 +146,26 @@ class PostLoginCommandRunner:
             return False
 
         start_gate = self.gate.all_selected_ready()
+        selected = self.gate.selected_indices()
+        if not selected:
+            self._log_waiting(None, "NO_SELECTED_ACCOUNTS", reason)
+            return False
+
         if not start_gate.ok:
             self._log_waiting(start_gate.account_index, start_gate.reason, reason)
-            return False
 
         with self.lock:
             if self.is_running():
+                if start_gate.ok:
+                    self.start_gate_satisfied = True
                 return True
 
-            selected = self.gate.selected_indices()
             if selected and self.current_index in selected:
                 self.next_position = selected.index(self.current_index)
             else:
                 self.next_position = 0
 
+            self.start_gate_satisfied = bool(start_gate.ok)
             self.stop_event.clear()
             self.thread = threading.Thread(
                 target=self._run_loop,
@@ -162,13 +175,22 @@ class PostLoginCommandRunner:
             self.thread.start()
 
         mode = "CURRENT_ACCOUNT_BACKGROUND_TEST" if self._debug_only() else "COMMAND_LOOP"
-        print(
-            "Post-login commands started - "
-            f"reason={reason} - mode={mode} - accounts={[i + 1 for i in start_gate.ready_indices]}"
-        )
-        self._set_status(
-            f"أوامر الدخول بدأت - {len(start_gate.ready_indices)} حساب جاهز"
-        )
+        if start_gate.ok:
+            print(
+                "Post-login commands started - "
+                f"reason={reason} - mode={mode} - accounts={[i + 1 for i in start_gate.ready_indices]}"
+            )
+            self._set_status(
+                f"أوامر الدخول بدأت - {len(start_gate.ready_indices)} حساب جاهز"
+            )
+        else:
+            account_text = "?" if start_gate.account_index is None else str(start_gate.account_index + 1)
+            print(
+                "Post-login commands watcher started - "
+                f"reason={reason} - mode={mode} - waiting_account={account_text} - "
+                f"waiting_reason={start_gate.reason}"
+            )
+            self._set_status("أوامر الدخول تنتظر اكتمال READY لكل الحسابات")
         return True
 
     def request_stop(self, reason="manual"):
@@ -197,6 +219,17 @@ class PostLoginCommandRunner:
 
     def _track_problem_or_recover(self, problem_index, problem_reason):
         if problem_index is None:
+            self.problem_key = None
+            self.problem_started_at = None
+            return
+
+        # These are waiting states, not reasons to close/reopen a game page.
+        if str(problem_reason).startswith("BASELINE_PENDING") or str(problem_reason).startswith("TIMER_REQUIRED_FOR_STATE"):
+            self.problem_key = None
+            self.problem_started_at = None
+            return
+
+        if str(problem_reason) in {"USER_PAUSE_REQUESTED", "LOGIN_MONITOR_PAUSED", "LOGIN_SEQUENCE_RUNNING"}:
             self.problem_key = None
             self.problem_started_at = None
             return
@@ -295,6 +328,26 @@ class PostLoginCommandRunner:
                 self._log_waiting(None, "NO_SELECTED_ACCOUNTS", "loop")
                 self._sleep_interruptible(1.0)
                 continue
+
+            if not self.start_gate_satisfied:
+                start_gate = self.gate.all_selected_ready()
+                if not start_gate.ok:
+                    self._log_waiting(start_gate.account_index, start_gate.reason, "startup_gate")
+                    self._track_problem_or_recover(start_gate.account_index, start_gate.reason)
+                    self._sleep_interruptible(1.0)
+                    continue
+
+                self.start_gate_satisfied = True
+                self.problem_key = None
+                self.problem_started_at = None
+                self.next_position = 0
+                print(
+                    "Post-login startup gate satisfied - "
+                    f"accounts={[i + 1 for i in start_gate.ready_indices]}"
+                )
+                self._set_status(
+                    f"أوامر الدخول بدأت بعد اكتمال READY - {len(start_gate.ready_indices)} حساب"
+                )
 
             if self.next_position >= len(selected):
                 self.next_position = 0
