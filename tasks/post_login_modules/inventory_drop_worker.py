@@ -1,0 +1,290 @@
+import os
+import time
+from dataclasses import dataclass
+from datetime import datetime
+
+import pydirectinput
+import win32gui
+from PIL import ImageDraw
+
+from tasks.post_login_modules.inventory_grid_probe import (
+    detect_inventory_grid,
+    draw_failure_debug,
+)
+from tasks.post_login_modules.inventory_item_probe import (
+    DEFAULT_MATCH_THRESHOLD,
+    InventoryItemProbeResult,
+    draw_item_debug,
+    load_item_templates,
+    probe_items,
+)
+from tasks.post_login_modules.window_capture import capture_pid_window
+
+
+@dataclass
+class DropAction:
+    slot_index: int
+    item_name: str
+    score: float
+    slot_screen: tuple[int, int]
+    target_screen: tuple[int, int]
+
+
+class InventoryDropWorkerModule:
+    """Drop matched items from the current account inventory.
+
+    This is the first real Drop stage, but it is intentionally limited:
+      - current account only
+      - only items matched from assets/drop_items
+      - one item per account by default
+      - LoginPriorityGate and AutomationInputLock are owned by the runner before
+        this module runs
+
+    It uses the user's existing Conquer drop flow style: click the item slot,
+    then click a safe ground point away from the bag. The number of clicks is a
+    setting and defaults to double-click per point for the current test.
+    """
+
+    name = "inventory_drop_worker"
+    setting_key = "enable_inventory_drop_worker"
+
+    def __init__(self, launcher):
+        self.launcher = launcher
+
+    def _setting(self, key, default=None):
+        if hasattr(self.launcher, "get_runtime_setting"):
+            try:
+                return self.launcher.get_runtime_setting(key, default)
+            except Exception:
+                return default
+        return default
+
+    def _feature_enabled(self, key, default=False):
+        if hasattr(self.launcher, "feature_enabled"):
+            try:
+                return bool(self.launcher.feature_enabled(key, default))
+            except Exception:
+                return bool(default)
+
+        value = self._setting(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+    def _float_setting(self, key, default, minimum=0.0, maximum=None):
+        try:
+            value = float(self._setting(key, default))
+        except Exception:
+            value = float(default)
+        value = max(float(minimum), value)
+        if maximum is not None:
+            value = min(float(maximum), value)
+        return value
+
+    def _int_setting(self, key, default, minimum=1, maximum=None):
+        try:
+            value = int(float(self._setting(key, default)))
+        except Exception:
+            value = int(default)
+        value = max(int(minimum), value)
+        if maximum is not None:
+            value = min(int(maximum), value)
+        return value
+
+    def enabled(self):
+        return self._feature_enabled(self.setting_key, True)
+
+    def _templates_dir(self):
+        value = self._setting("inventory_drop_templates_dir", os.path.join("assets", "drop_items"))
+        text = str(value or os.path.join("assets", "drop_items")).strip()
+        return text or os.path.join("assets", "drop_items")
+
+    def _threshold(self):
+        return self._float_setting(
+            "inventory_drop_match_threshold",
+            max(0.78, DEFAULT_MATCH_THRESHOLD),
+            minimum=0.10,
+            maximum=0.99,
+        )
+
+    def _max_items(self):
+        return self._int_setting("inventory_drop_max_items_per_account", 1, minimum=1, maximum=40)
+
+    def _clicks_per_point(self):
+        return self._int_setting("inventory_drop_clicks_per_point", 2, minimum=1, maximum=3)
+
+    def _click_delay(self):
+        return self._float_setting("inventory_drop_click_delay", 0.12, minimum=0.02, maximum=1.0)
+
+    def _target_fraction(self):
+        x = self._float_setting("inventory_drop_target_x_fraction", 0.50, minimum=0.05, maximum=0.90)
+        y = self._float_setting("inventory_drop_target_y_fraction", 0.45, minimum=0.05, maximum=0.85)
+        return x, y
+
+    def _save_debug_enabled(self):
+        return self._feature_enabled("inventory_drop_save_debug_image", True)
+
+    def _debug_dir(self):
+        value = self._setting("inventory_drop_debug_dir", "logs/inventory_drop_worker")
+        text = str(value or "logs/inventory_drop_worker").strip()
+        return text or "logs/inventory_drop_worker"
+
+    def _save_image(self, image, prefix, account_index, pid):
+        if not self._save_debug_enabled() or image is None:
+            return None
+        folder = self._debug_dir()
+        os.makedirs(folder, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(folder, f"{prefix}_account_{account_index + 1}_pid_{pid}_{stamp}.png")
+        image.save(path)
+        print(f"Inventory drop debug image saved: {path}")
+        return path
+
+    def _screen_point_from_window_point(self, hwnd, point):
+        try:
+            left, top, _, _ = win32gui.GetWindowRect(hwnd)
+        except Exception:
+            left, top = 0, 0
+        return int(left + point[0]), int(top + point[1])
+
+    def _drop_target_screen(self, hwnd):
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = max(1, right - left)
+            height = max(1, bottom - top)
+        except Exception:
+            left, top, width, height = 0, 0, 1920, 1080
+
+        fx, fy = self._target_fraction()
+        return int(left + width * fx), int(top + height * fy)
+
+    def _slot_center_screen(self, hwnd, box):
+        x1, y1, x2, y2 = box
+        center = (int(round((x1 + x2) / 2)), int(round((y1 + y2) / 2)))
+        return self._screen_point_from_window_point(hwnd, center)
+
+    def _click_point(self, x, y, clicks):
+        delay = self._click_delay()
+        pydirectinput.moveTo(int(x), int(y))
+        time.sleep(delay)
+        for _ in range(max(1, int(clicks))):
+            pydirectinput.click(int(x), int(y))
+            time.sleep(delay)
+
+    def _draw_drop_debug(self, image, grid, item_result, actions):
+        debug = draw_item_debug(image, grid, item_result)
+        draw = ImageDraw.Draw(debug)
+
+        try:
+            for action in actions:
+                # Convert screen point back to the captured image coordinate for the label if possible.
+                draw.rectangle(grid.slots[action.slot_index].box, outline=(255, 255, 0), width=4)
+                x1, y1, _, _ = grid.slots[action.slot_index].box
+                draw.text((x1 + 2, y1 + 18), "DROP", fill=(255, 255, 0))
+        except Exception:
+            pass
+
+        return debug
+
+    def _execute_drop(self, action):
+        slot_x, slot_y = action.slot_screen
+        target_x, target_y = action.target_screen
+        clicks = self._clicks_per_point()
+
+        print(
+            "Inventory drop executing - "
+            f"slot={action.slot_index + 1} - item={action.item_name!r} - "
+            f"score={action.score:.3f} - slot_xy={action.slot_screen} - "
+            f"target_xy={action.target_screen} - clicks={clicks}"
+        )
+
+        self._click_point(slot_x, slot_y, clicks)
+        time.sleep(self._click_delay())
+        self._click_point(target_x, target_y, clicks)
+        time.sleep(0.25)
+
+    def run(self, account_index, session):
+        if not self.enabled():
+            return "SKIPPED"
+
+        pid = session.get("pid")
+        page_name = session.get("page_name", "")
+        if not pid:
+            return "INVENTORY_DROP_NO_PID"
+
+        image, hwnd = capture_pid_window(pid)
+        if image is None or not hwnd:
+            return "INVENTORY_DROP_CAPTURE_FAILED"
+
+        grid = detect_inventory_grid(image)
+        if grid is None:
+            print(
+                "Inventory drop skipped - bag/grid not detected - "
+                f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - name={page_name!r}"
+            )
+            try:
+                self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
+            except Exception as error:
+                print(f"Inventory drop failure image save failed: {error}")
+            return "OK"
+
+        templates_dir = self._templates_dir()
+        templates = load_item_templates(templates_dir)
+        if not templates:
+            print(
+                "Inventory drop skipped - no drop templates - "
+                f"folder={templates_dir!r}"
+            )
+            return "OK"
+
+        item_result = probe_items(image, grid, templates, self._threshold())
+        if not item_result.matches:
+            print(
+                "Inventory drop skipped - no matched drop items - "
+                f"account={account_index + 1} - templates={len(templates)} - "
+                f"threshold={self._threshold():.2f}"
+            )
+            try:
+                self._save_image(draw_item_debug(image, grid, item_result), "no_drop_matches", account_index, pid)
+            except Exception as error:
+                print(f"Inventory drop no-match debug save failed: {error}")
+            return "OK"
+
+        matches = sorted(item_result.matches, key=lambda item: item.slot_index)[: self._max_items()]
+        target = self._drop_target_screen(hwnd)
+        actions = []
+        for match in matches:
+            actions.append(
+                DropAction(
+                    slot_index=match.slot_index,
+                    item_name=match.item_name,
+                    score=match.score,
+                    slot_screen=self._slot_center_screen(hwnd, match.box),
+                    target_screen=target,
+                )
+            )
+
+        try:
+            self._save_image(self._draw_drop_debug(image, grid, item_result, actions), "before_drop", account_index, pid)
+        except Exception as error:
+            print(f"Inventory drop before-drop debug save failed: {error}")
+
+        dropped = 0
+        for action in actions:
+            self._execute_drop(action)
+            dropped += 1
+
+        try:
+            after_image, _ = capture_pid_window(pid)
+            if after_image is not None:
+                self._save_image(after_image, "after_drop", account_index, pid)
+        except Exception as error:
+            print(f"Inventory drop after-drop image save failed: {error}")
+
+        print(
+            "Inventory drop worker OK - "
+            f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
+            f"dropped={dropped} - available_matches={len(item_result.matches)} - "
+            f"threshold={self._threshold():.2f}"
+        )
+        return "OK"
