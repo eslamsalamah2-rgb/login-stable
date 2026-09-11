@@ -31,16 +31,16 @@ class DropAction:
 
 
 class InventoryDropWorkerModule:
-    """Drop matched items from the current account inventory.
+    """Drop only matched target items from the current account inventory.
 
-    Current real-drop stage:
-      - current account only
-      - only items matched from assets/drop_items
-      - empties all matched slots in the current visible bag pass before moving
-        to the next account
-      - drop target defaults to the extreme top-right of the current game window
-      - confirms the Yes popup by image matching near the bag first
+    Important behavior:
+      - scan the current bag
+      - choose one matched item only
+      - drop it
+      - confirm Yes if needed
+      - scan again before choosing the next item
 
+    This avoids using stale slot coordinates after the game reorders the bag.
     LoginPriorityGate and AutomationInputLock are owned by the runner before
     this module runs.
     """
@@ -102,20 +102,22 @@ class InventoryDropWorkerModule:
     def _threshold(self):
         return self._float_setting(
             "inventory_drop_match_threshold",
-            max(0.78, DEFAULT_MATCH_THRESHOLD),
+            max(0.88, DEFAULT_MATCH_THRESHOLD),
             minimum=0.10,
             maximum=0.99,
         )
 
     def _max_items(self):
-        # 40 = full visible bag: 5 columns x 8 rows.
         return self._int_setting("inventory_drop_max_items_per_account", 40, minimum=1, maximum=40)
 
     def _clicks_per_point(self):
         return self._int_setting("inventory_drop_clicks_per_point", 2, minimum=1, maximum=3)
 
     def _click_delay(self):
-        return self._float_setting("inventory_drop_click_delay", 0.12, minimum=0.02, maximum=1.0)
+        return self._float_setting("inventory_drop_click_delay", 0.04, minimum=0.01, maximum=1.0)
+
+    def _after_drop_delay(self):
+        return self._float_setting("inventory_drop_after_drop_delay", 0.05, minimum=0.0, maximum=1.0)
 
     def _target_mode(self):
         return str(self._setting("inventory_drop_target_mode", "top_right") or "top_right").strip().lower()
@@ -126,10 +128,8 @@ class InventoryDropWorkerModule:
         return x, y
 
     def _target_margins(self):
-        # Very small margins: the user requested the farthest possible top-right
-        # point. Keep it just inside the window rectangle.
-        x = self._int_setting("inventory_drop_target_margin_x", 6, minimum=1, maximum=300)
-        y = self._int_setting("inventory_drop_target_margin_y", 6, minimum=1, maximum=300)
+        x = self._int_setting("inventory_drop_target_margin_x", 2, minimum=1, maximum=300)
+        y = self._int_setting("inventory_drop_target_margin_y", 2, minimum=1, maximum=300)
         return x, y
 
     def _confirm_enabled(self):
@@ -142,14 +142,14 @@ class InventoryDropWorkerModule:
         return self._float_setting("inventory_drop_confirm_yes_threshold", 0.76, minimum=0.10, maximum=0.99)
 
     def _confirm_timeout(self):
-        return self._float_setting("inventory_drop_confirm_yes_timeout", 3.0, minimum=0.2, maximum=10.0)
+        return self._float_setting("inventory_drop_confirm_yes_timeout", 1.0, minimum=0.2, maximum=10.0)
 
     def _confirm_template_paths(self):
         value = self._setting("inventory_drop_confirm_yes_paths", "")
         return str(value or "")
 
     def _save_debug_enabled(self):
-        return self._feature_enabled("inventory_drop_save_debug_image", True)
+        return self._feature_enabled("inventory_drop_save_debug_image", False)
 
     def _debug_dir(self):
         value = self._setting("inventory_drop_debug_dir", "logs/inventory_drop_worker")
@@ -205,18 +205,18 @@ class InventoryDropWorkerModule:
             pydirectinput.click(int(x), int(y))
             time.sleep(delay)
 
-    def _draw_drop_debug(self, image, grid, item_result, actions):
+    def _draw_drop_debug(self, image, grid, item_result, action=None):
         debug = draw_item_debug(image, grid, item_result)
-        draw = ImageDraw.Draw(debug)
+        if action is None:
+            return debug
 
+        draw = ImageDraw.Draw(debug)
         try:
-            for action in actions:
-                draw.rectangle(grid.slots[action.slot_index].box, outline=(255, 255, 0), width=4)
-                x1, y1, _, _ = grid.slots[action.slot_index].box
-                draw.text((x1 + 2, y1 + 18), "DROP", fill=(255, 255, 0))
+            draw.rectangle(grid.slots[action.slot_index].box, outline=(255, 255, 0), width=4)
+            x1, y1, _, _ = grid.slots[action.slot_index].box
+            draw.text((x1 + 2, y1 + 18), "NEXT DROP", fill=(255, 255, 0))
         except Exception:
             pass
-
         return debug
 
     def _confirm_yes_if_needed(self, pid, hwnd, grid):
@@ -254,8 +254,33 @@ class InventoryDropWorkerModule:
         self._click_point(slot_x, slot_y, clicks)
         time.sleep(self._click_delay())
         self._click_point(target_x, target_y, clicks)
-        time.sleep(0.20)
+        time.sleep(self._after_drop_delay())
         return self._confirm_yes_if_needed(pid, hwnd, grid)
+
+    def _scan_next_drop(self, pid, hwnd, templates):
+        image, current_hwnd = capture_pid_window(pid)
+        if image is None or not current_hwnd:
+            return None, current_hwnd, None, None
+
+        grid = detect_inventory_grid(image)
+        if grid is None:
+            return image, current_hwnd, None, None
+
+        item_result = probe_items(image, grid, templates, self._threshold())
+        if not item_result.matches:
+            return image, current_hwnd, grid, item_result
+
+        # Pick one current matched slot only. Do not prepare a list of future
+        # slots because the inventory compacts/reorders after every drop.
+        match = sorted(item_result.matches, key=lambda item: (item.slot_index, -item.score))[0]
+        action = DropAction(
+            slot_index=match.slot_index,
+            item_name=match.item_name,
+            score=match.score,
+            slot_screen=self._slot_center_screen(current_hwnd, match.box),
+            target_screen=self._drop_target_screen(current_hwnd),
+        )
+        return image, current_hwnd, grid, (item_result, action)
 
     def run(self, account_index, session):
         if not self.enabled():
@@ -266,88 +291,81 @@ class InventoryDropWorkerModule:
         if not pid:
             return "INVENTORY_DROP_NO_PID"
 
-        image, hwnd = capture_pid_window(pid)
-        if image is None or not hwnd:
-            return "INVENTORY_DROP_CAPTURE_FAILED"
-
-        grid = detect_inventory_grid(image)
-        if grid is None:
-            print(
-                "Inventory drop skipped - bag/grid not detected - "
-                f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - name={page_name!r}"
-            )
-            try:
-                self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
-            except Exception as error:
-                print(f"Inventory drop failure image save failed: {error}")
-            return "OK"
-
         templates_dir = self._templates_dir()
         templates = load_item_templates(templates_dir)
         if not templates:
-            print(
-                "Inventory drop skipped - no drop templates - "
-                f"folder={templates_dir!r}"
-            )
+            print("Inventory drop skipped - no drop templates - " f"folder={templates_dir!r}")
             return "OK"
 
-        item_result = probe_items(image, grid, templates, self._threshold())
-        if not item_result.matches:
-            print(
-                "Inventory drop skipped - no matched drop items - "
-                f"account={account_index + 1} - templates={len(templates)} - "
-                f"threshold={self._threshold():.2f}"
-            )
-            try:
-                self._save_image(draw_item_debug(image, grid, item_result), "no_drop_matches", account_index, pid)
-            except Exception as error:
-                print(f"Inventory drop no-match debug save failed: {error}")
-            return "OK"
-
-        matches = sorted(item_result.matches, key=lambda item: item.slot_index)[: self._max_items()]
-        target = self._drop_target_screen(hwnd)
-        actions = []
-        for match in matches:
-            actions.append(
-                DropAction(
-                    slot_index=match.slot_index,
-                    item_name=match.item_name,
-                    score=match.score,
-                    slot_screen=self._slot_center_screen(hwnd, match.box),
-                    target_screen=target,
-                )
-            )
-
-        try:
-            self._save_image(self._draw_drop_debug(image, grid, item_result, actions), "before_drop_all", account_index, pid)
-        except Exception as error:
-            print(f"Inventory drop before-drop debug save failed: {error}")
-
+        max_items = self._max_items()
+        threshold = self._threshold()
         print(
-            "Inventory drop pass started - "
+            "Inventory rescan-drop pass started - "
             f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"matched_items={len(item_result.matches)} - planned_drops={len(actions)} - "
-            f"max_items={self._max_items()} - target={target}"
+            f"templates={len(templates)} - max_items={max_items} - threshold={threshold:.2f}"
         )
 
         dropped = 0
-        for action in actions:
+        last_matches = 0
+        last_hwnd = None
+
+        while dropped < max_items:
+            image, hwnd, grid, scan_result = self._scan_next_drop(pid, last_hwnd, templates)
+            if image is None or not hwnd:
+                return "INVENTORY_DROP_CAPTURE_FAILED"
+            last_hwnd = hwnd
+
+            if grid is None:
+                print(
+                    "Inventory drop skipped - bag/grid not detected during rescan - "
+                    f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - name={page_name!r}"
+                )
+                try:
+                    self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
+                except Exception as error:
+                    print(f"Inventory drop failure image save failed: {error}")
+                break
+
+            if scan_result is None:
+                print(
+                    "Inventory drop complete - no matched target items remain - "
+                    f"account={account_index + 1} - dropped={dropped}"
+                )
+                break
+
+            item_result, action = scan_result
+            last_matches = len(item_result.matches)
+            print(
+                "Inventory drop rescan - "
+                f"account={account_index + 1} - remaining_matches={last_matches} - "
+                f"next_slot={action.slot_index + 1} - next_item={action.item_name!r} - score={action.score:.3f}"
+            )
+
+            try:
+                self._save_image(
+                    self._draw_drop_debug(image, grid, item_result, action),
+                    f"before_drop_{dropped + 1:02d}",
+                    account_index,
+                    pid,
+                )
+            except Exception as error:
+                print(f"Inventory drop before-drop debug save failed: {error}")
+
             if not self._execute_drop(action, pid, hwnd, grid):
                 return "INVENTORY_DROP_CONFIRM_YES_FAILED"
+
             dropped += 1
-            time.sleep(0.10)
 
         try:
             after_image, _ = capture_pid_window(pid)
             if after_image is not None:
-                self._save_image(after_image, "after_drop_all", account_index, pid)
+                self._save_image(after_image, "after_drop_rescan", account_index, pid)
         except Exception as error:
             print(f"Inventory drop after-drop image save failed: {error}")
 
         print(
             "Inventory drop worker OK - "
             f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"dropped={dropped} - available_matches={len(item_result.matches)} - "
-            f"threshold={self._threshold():.2f}"
+            f"dropped={dropped} - last_matches={last_matches} - threshold={threshold:.2f}"
         )
         return "OK"
