@@ -50,8 +50,10 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_drop_match_threshold": 0.88,
     "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
-    "inventory_drop_click_delay": 0.01,
-    "inventory_drop_after_drop_delay": 0.0,
+    # سرعة الدروب الأساسية. كانت 0.01 وده سريع جدًا؛ 0.10 يعني عُشر ثانية بين الضغطات.
+    "inventory_drop_click_delay": 0.10,
+    # انتظار بعد كل رمية كاملة قبل السكان التالي، لتقليل اللخبطة في الصفحة/الرسائل.
+    "inventory_drop_after_drop_delay": 0.15,
     "inventory_drop_target_mode": "top_right",
     "inventory_drop_target_margin_x": 1,
     "inventory_drop_target_margin_y": 1,
@@ -90,8 +92,8 @@ MERGE_SETTING_LABELS = {
     "inventory_drop_match_threshold": "inventory_drop_match_threshold | حساسية الدروب - أعلى أمانًا",
     "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | أقصى عدد عناصر مطابقة يتم رميها قبل الحساب التالي",
     "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي",
-    "inventory_drop_click_delay": "inventory_drop_click_delay | التأخير بين ضغطات الدروب/ثانية",
-    "inventory_drop_after_drop_delay": "inventory_drop_after_drop_delay | انتظار بسيط بعد كل رمية قبل إعادة السكان",
+    "inventory_drop_click_delay": "inventory_drop_click_delay | سرعة الدروب: وقت بين كل ضغطة والتانية/ثانية - مثال 0.10 أو 0.20",
+    "inventory_drop_after_drop_delay": "inventory_drop_after_drop_delay | انتظار بعد كل رمية كاملة قبل السكان التالي/ثانية",
     "inventory_drop_target_mode": "inventory_drop_target_mode | وضع مكان الرمي: top_right أو fraction",
     "inventory_drop_target_margin_x": "inventory_drop_target_margin_x | هامش الرمي من يمين النافذة بالبكسل",
     "inventory_drop_target_margin_y": "inventory_drop_target_margin_y | هامش الرمي من أعلى النافذة بالبكسل",
@@ -107,15 +109,28 @@ MERGE_SETTING_LABELS = {
 }
 
 
-DROP_TEST_PRESET = dict(MERGE_SETTING_DEFAULTS)
-DROP_TEST_PRESET.update(
-    {
-        "enable_post_login_commands": True,
-        "post_login_debug_only": False,
-        "post_login_account_delay_seconds": 0.10,
-        "post_login_round_delay_seconds": 0.25,
-    }
-)
+# إعدادات تتفرض عند الضغط على Drop Scan أو عند بداية البرنامج علشان المرحلة الحالية تفضل Drop.
+# لا نضع فيها سرعات الدروب؛ السرعات تبقى قابلة للتعديل من Settings ولا يتم مسح تعديل المستخدم كل تشغيل.
+DROP_TEST_FORCED_SETTINGS = {
+    "enable_post_login_commands": True,
+    "post_login_debug_only": False,
+    "enable_inventory_probe": False,
+    "enable_inventory_ensure_open": True,
+    "enable_inventory_grid_probe": False,
+    "enable_inventory_item_probe": False,
+    "enable_inventory_drop_worker": True,
+    "post_login_account_delay_seconds": 0.10,
+    "post_login_round_delay_seconds": 0.25,
+}
+
+DROP_SPEED_MIGRATIONS = {
+    "inventory_drop_click_delay": (0.01, 0.10),
+    "inventory_drop_after_drop_delay": (0.0, 0.15),
+}
+
+
+# للاحتفاظ باسم المتغير القديم في أي لوج/كود خارجي، لكنه لم يعد يمسح سرعات المستخدم.
+DROP_TEST_PRESET = dict(DROP_TEST_FORCED_SETTINGS)
 
 
 def _install_merge_settings():
@@ -128,21 +143,42 @@ def _install_merge_settings():
             pass
 
 
+def _apply_default_settings_without_overwriting_user_speed(self):
+    for key, value in MERGE_SETTING_DEFAULTS.items():
+        if key not in self.runtime_settings:
+            self.runtime_settings[key] = value
+
+    for key, (old_value, new_value) in DROP_SPEED_MIGRATIONS.items():
+        raw = self.runtime_settings.get(key, None)
+        should_migrate = raw is None
+        if not should_migrate:
+            try:
+                should_migrate = abs(float(raw) - float(old_value)) < 0.000001
+            except Exception:
+                should_migrate = True
+        if should_migrate:
+            self.runtime_settings[key] = new_value
+
+
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
     """Prepare the program for the current fast rescan-drop test.
 
     Drop execution rescans after every item, but visual debug probes are disabled
-    so it does not waste time saving images while dropping.
+    so it does not waste time saving images while dropping. Drop speed remains
+    editable from Settings and is not overwritten by this preset.
     """
     try:
-        self.runtime_settings.update(DROP_TEST_PRESET)
+        _apply_default_settings_without_overwriting_user_speed(self)
+        self.runtime_settings.update(DROP_TEST_FORCED_SETTINGS)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Fast Rescan-Drop preset applied - "
-            f"reason={reason} - values={DROP_TEST_PRESET}"
+            "Inventory Rescan-Drop preset applied - "
+            f"reason={reason} - forced={DROP_TEST_FORCED_SETTINGS} - "
+            f"click_delay={self.runtime_settings.get('inventory_drop_click_delay')} - "
+            f"after_drop_delay={self.runtime_settings.get('inventory_drop_after_drop_delay')}"
         )
-        self.set_status("Drop جاهز: يرمي عنصر مطابق ثم يعمل سكان سريع ويكرر")
+        self.set_status("Drop جاهز: السرعة قابلة للتعديل من Settings")
     except Exception as error:
         print(f"Inventory Drop preset failed: {error}")
         self.set_status("فشل تجهيز اختبار Drop")
