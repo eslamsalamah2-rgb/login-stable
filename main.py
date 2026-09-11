@@ -2,7 +2,8 @@ import health_recovery_patch  # keeps timer-gated recovery safe
 import startup_focus_patch  # pauses monitor during input and retries focus failures
 import password_error_policy_patch  # restarts all pages after repeated wrong-password message
 import existing_pages_settings_patch  # adds Scan Open, side panel, and editable Settings
-import pre_merge_safety_patch  # logging, backups, input lock, feature flags, rollback prep
+import security_logger_update_patch  # handles 99 Security Logger update dialog before Start Game
+import pre_merge_safety_patch  # logging, backups, input lock, feature flags
 import post_login_commands_patch  # starts safe post-login command loop after READY accounts
 import post_login_module_merge_patch  # safe modular worker hook for future Drop/Use/Sash merge
 import post_login_account_budget_patch  # 3-minute budget per account for stage-two commands
