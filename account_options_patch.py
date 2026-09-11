@@ -1,9 +1,13 @@
 """Per-account saved options for post-login modules.
 
-This is a UI/data patch only.  It does not change the stable Login workflow.
-Each account row can now save independent module choices:
+This is a UI/data patch only. It does not change the stable Login workflow.
+Each account row can save independent module choices:
   - Revive mode: No Rev / Rev / Rev Here
-  - Sash flag: saved now for the next stage, but not executed yet
+  - Sash flag
+
+Default rule:
+  - New accounts start on Rev by default, not No Rev.
+  - Existing saved accounts keep their saved revive_mode.
 
 Values are saved into accounts.json so they survive restart.
 """
@@ -17,6 +21,8 @@ from account_manager import AccountManager
 from gui import SimpleLauncher
 from selection_launcher import SelectionAwareLauncher
 
+
+DEFAULT_NEW_ACCOUNT_REVIVE_MODE = "revive"
 
 REVIVE_LABEL_TO_MODE = {
     "No Rev": "none",
@@ -39,8 +45,10 @@ REVIVE_VALUES = ["No Rev", "Rev", "Rev Here"]
 _ORIGINAL_CREATE_ACCOUNT_ROW = SelectionAwareLauncher.create_account_row
 
 
-def _normal_revive_mode(value):
-    text = str(value or "").strip().lower().replace("-", "_")
+def _normal_revive_mode(value, default="none"):
+    text = str(value if value is not None else "").strip().lower().replace("-", "_")
+    if not text:
+        text = str(default or "none").strip().lower().replace("-", "_")
     if text in {"rev", "revive"}:
         return "revive"
     if text in {"rev_here", "revive_here", "rev and here", "revive and here", "rev_and_here", "revive_and_here"}:
@@ -59,9 +67,11 @@ def _bool_value(value, default=False):
     return bool(default)
 
 
-def _revive_label(value):
-    key = str(value or "").strip().lower()
-    return REVIVE_MODE_TO_LABEL.get(key, REVIVE_MODE_TO_LABEL.get(_normal_revive_mode(value), "No Rev"))
+def _revive_label(value, default="none"):
+    key = str(value if value is not None else "").strip().lower()
+    if not key:
+        key = str(default or "none").strip().lower()
+    return REVIVE_MODE_TO_LABEL.get(key, REVIVE_MODE_TO_LABEL.get(_normal_revive_mode(value, default), "No Rev"))
 
 
 def _revive_mode_from_row(row):
@@ -71,7 +81,7 @@ def _revive_mode_from_row(row):
             return REVIVE_LABEL_TO_MODE.get(var.get(), _normal_revive_mode(var.get()))
     except Exception:
         pass
-    return "none"
+    return DEFAULT_NEW_ACCOUNT_REVIVE_MODE
 
 
 def _sash_enabled_from_row(row):
@@ -103,7 +113,11 @@ def _load_accounts_with_options(self):
             username = str(item.get("username", "")).strip()
             password = str(item.get("password", ""))
             character_name = str(item.get("character_name", item.get("name", ""))).strip()
-            revive_mode = _normal_revive_mode(item.get("revive_mode", item.get("revive", "none")))
+
+            # Old account rows that never had a revive setting become Rev by
+            # default. Explicit saved "none" remains No Rev.
+            revive_raw = item.get("revive_mode", item.get("revive", DEFAULT_NEW_ACCOUNT_REVIVE_MODE))
+            revive_mode = _normal_revive_mode(revive_raw, DEFAULT_NEW_ACCOUNT_REVIVE_MODE)
             sash_enabled = _bool_value(item.get("sash_enabled", item.get("sash", False)))
 
             if username and password:
@@ -132,7 +146,8 @@ def _save_accounts_with_options(self, accounts):
             username = str(item.get("username", "")).strip()
             password = str(item.get("password", ""))
             character_name = str(item.get("character_name", "")).strip()
-            revive_mode = _normal_revive_mode(item.get("revive_mode", item.get("revive", "none")))
+            revive_raw = item.get("revive_mode", item.get("revive", DEFAULT_NEW_ACCOUNT_REVIVE_MODE))
+            revive_mode = _normal_revive_mode(revive_raw, DEFAULT_NEW_ACCOUNT_REVIVE_MODE)
             sash_enabled = _bool_value(item.get("sash_enabled", item.get("sash", False)))
 
             if not username or not password:
@@ -162,7 +177,14 @@ def _create_account_row_with_options(self, account=None):
 
     row = self.account_rows[-1]
 
-    revive_var = ctk.StringVar(value=_revive_label(account.get("revive_mode", "none")))
+    # New empty rows default to Rev. Existing rows use the value loaded from
+    # accounts.json, so a saved No Rev still opens as No Rev.
+    revive_var = ctk.StringVar(
+        value=_revive_label(
+            account.get("revive_mode", DEFAULT_NEW_ACCOUNT_REVIVE_MODE),
+            DEFAULT_NEW_ACCOUNT_REVIVE_MODE,
+        )
+    )
     revive_menu = ctk.CTkOptionMenu(
         row["frame"],
         values=REVIVE_VALUES,
@@ -218,4 +240,4 @@ SimpleLauncher.collect_accounts_from_ui = _collect_accounts_with_options
 SelectionAwareLauncher.collect_accounts_from_ui = _collect_accounts_with_options
 SelectionAwareLauncher.create_account_row = _create_account_row_with_options
 
-print("Account options patch active: per-account Rev/Rev Here + Sash flag saved")
+print("Account options patch active: new accounts default to Rev; per-account Rev/Rev Here + Sash saved")
