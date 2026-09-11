@@ -36,8 +36,9 @@ class InventoryDropWorkerModule:
     Current real-drop stage:
       - current account only
       - only items matched from assets/drop_items
-      - limited number of items per account
-      - drop target defaults to the top-right of the current game window
+      - empties all matched slots in the current visible bag pass before moving
+        to the next account
+      - drop target defaults to the extreme top-right of the current game window
       - confirms the Yes popup by image matching near the bag first
 
     LoginPriorityGate and AutomationInputLock are owned by the runner before
@@ -107,7 +108,8 @@ class InventoryDropWorkerModule:
         )
 
     def _max_items(self):
-        return self._int_setting("inventory_drop_max_items_per_account", 1, minimum=1, maximum=40)
+        # 40 = full visible bag: 5 columns x 8 rows.
+        return self._int_setting("inventory_drop_max_items_per_account", 40, minimum=1, maximum=40)
 
     def _clicks_per_point(self):
         return self._int_setting("inventory_drop_clicks_per_point", 2, minimum=1, maximum=3)
@@ -124,8 +126,10 @@ class InventoryDropWorkerModule:
         return x, y
 
     def _target_margins(self):
-        x = self._int_setting("inventory_drop_target_margin_x", 25, minimum=1, maximum=300)
-        y = self._int_setting("inventory_drop_target_margin_y", 55, minimum=1, maximum=300)
+        # Very small margins: the user requested the farthest possible top-right
+        # point. Keep it just inside the window rectangle.
+        x = self._int_setting("inventory_drop_target_margin_x", 6, minimum=1, maximum=300)
+        y = self._int_setting("inventory_drop_target_margin_y", 6, minimum=1, maximum=300)
         return x, y
 
     def _confirm_enabled(self):
@@ -315,20 +319,28 @@ class InventoryDropWorkerModule:
             )
 
         try:
-            self._save_image(self._draw_drop_debug(image, grid, item_result, actions), "before_drop", account_index, pid)
+            self._save_image(self._draw_drop_debug(image, grid, item_result, actions), "before_drop_all", account_index, pid)
         except Exception as error:
             print(f"Inventory drop before-drop debug save failed: {error}")
+
+        print(
+            "Inventory drop pass started - "
+            f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
+            f"matched_items={len(item_result.matches)} - planned_drops={len(actions)} - "
+            f"max_items={self._max_items()} - target={target}"
+        )
 
         dropped = 0
         for action in actions:
             if not self._execute_drop(action, pid, hwnd, grid):
                 return "INVENTORY_DROP_CONFIRM_YES_FAILED"
             dropped += 1
+            time.sleep(0.10)
 
         try:
             after_image, _ = capture_pid_window(pid)
             if after_image is not None:
-                self._save_image(after_image, "after_drop", account_index, pid)
+                self._save_image(after_image, "after_drop_all", account_index, pid)
         except Exception as error:
             print(f"Inventory drop after-drop image save failed: {error}")
 
