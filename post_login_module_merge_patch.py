@@ -49,8 +49,9 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_drop_templates_dir": "assets/drop_items",
     "inventory_drop_match_threshold": 0.88,
     "inventory_drop_max_items_per_account": 40,
-    "inventory_drop_clicks_per_point": 2,
-    # سرعة الدروب الأساسية. كانت 0.01 وده سريع جدًا؛ 0.10 يعني عُشر ثانية بين الضغطات.
+    # كليك واحد على الخانة وكليك واحد على مكان الرمي؛ الدابل كليك كان بيلخبط الصفحة.
+    "inventory_drop_clicks_per_point": 1,
+    # سرعة الدروب الأساسية. 0.10 يعني عُشر ثانية بين الضغطات.
     "inventory_drop_click_delay": 0.10,
     # انتظار بعد كل رمية كاملة قبل السكان التالي، لتقليل اللخبطة في الصفحة/الرسائل.
     "inventory_drop_after_drop_delay": 0.15,
@@ -91,7 +92,7 @@ MERGE_SETTING_LABELS = {
     "inventory_drop_templates_dir": "inventory_drop_templates_dir | مجلد صور عناصر الدروب",
     "inventory_drop_match_threshold": "inventory_drop_match_threshold | حساسية الدروب - أعلى أمانًا",
     "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | أقصى عدد عناصر مطابقة يتم رميها قبل الحساب التالي",
-    "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي",
+    "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي - 1 يعني كليك واحد، 2 يعني دابل كليك",
     "inventory_drop_click_delay": "inventory_drop_click_delay | سرعة الدروب: وقت بين كل ضغطة والتانية/ثانية - مثال 0.10 أو 0.20",
     "inventory_drop_after_drop_delay": "inventory_drop_after_drop_delay | انتظار بعد كل رمية كاملة قبل السكان التالي/ثانية",
     "inventory_drop_target_mode": "inventory_drop_target_mode | وضع مكان الرمي: top_right أو fraction",
@@ -124,6 +125,7 @@ DROP_TEST_FORCED_SETTINGS = {
 }
 
 DROP_SPEED_MIGRATIONS = {
+    "inventory_drop_clicks_per_point": (2, 1),
     "inventory_drop_click_delay": (0.01, 0.10),
     "inventory_drop_after_drop_delay": (0.0, 0.15),
 }
@@ -175,10 +177,11 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
         print(
             "Inventory Rescan-Drop preset applied - "
             f"reason={reason} - forced={DROP_TEST_FORCED_SETTINGS} - "
+            f"clicks={self.runtime_settings.get('inventory_drop_clicks_per_point')} - "
             f"click_delay={self.runtime_settings.get('inventory_drop_click_delay')} - "
             f"after_drop_delay={self.runtime_settings.get('inventory_drop_after_drop_delay')}"
         )
-        self.set_status("Drop جاهز: السرعة قابلة للتعديل من Settings")
+        self.set_status("Drop جاهز: الكليك والسرعة قابلة للتعديل من Settings")
     except Exception as error:
         print(f"Inventory Drop preset failed: {error}")
         self.set_status("فشل تجهيز اختبار Drop")
