@@ -54,4 +54,7 @@ import account_retry_limit_patch
 import inventory_grid_alignment_patch
 import final_stability_cleanup_patch
 
+# Final gate: manual Start must launch real post-login work after Login.
+import post_login_start_gate_fix_patch
+
 print("Patch bootstrap loaded: stable import order active")
