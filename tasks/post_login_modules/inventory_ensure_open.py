@@ -3,7 +3,9 @@ import time
 from datetime import datetime
 
 import pydirectinput
+from PIL import ImageDraw
 
+from tasks.post_login_modules.inventory_anchor import find_inventory_anchor
 from tasks.post_login_modules.inventory_grid_probe import (
     detect_inventory_grid,
     draw_failure_debug,
@@ -15,15 +17,14 @@ from tasks.post_login_modules.window_capture import capture_pid_window
 class InventoryEnsureOpenModule:
     """Make sure the current account's inventory is open before later work.
 
-    The idea is simple and isolated:
-      1. capture only the current account PID window
-      2. detect whether the bag grid is visible
-      3. if it is not visible, press the configured inventory hotkey
-      4. capture again and verify
+    Important rule:
+      - Open/closed detection uses ONLY the manual image anchor from the bag UI
+        such as assets/inventory_open.png.
+      - It must not use the line-grid fallback as proof that the bag is open,
+        because other UI/game objects can accidentally look like a grid.
 
-    It does not drop, use, or click items. It only uses the keyboard hotkey while
-    the runner already has the current account in the foreground and owns the
-    AutomationInputLock.
+    If the manual anchor is not found, the module presses the configured
+    inventory hotkey and then verifies the same anchor again.
     """
 
     name = "inventory_ensure_open"
@@ -107,12 +108,33 @@ class InventoryEnsureOpenModule:
         print(f"Inventory open probe debug image saved: {path}")
         return path
 
-    def _capture_and_detect(self, pid):
+    def _draw_anchor_debug(self, image, anchor, label):
+        debug = image.copy()
+        draw = ImageDraw.Draw(debug)
+        if anchor is not None:
+            draw.rectangle(anchor.anchor_box, outline=(255, 215, 0), width=3)
+            draw.rectangle(anchor.grid_box, outline=(80, 255, 80), width=3)
+            x1, y1, _, _ = anchor.anchor_box
+            draw.text((x1 + 3, y1 - 14 if y1 >= 16 else y1 + 32), label, fill=(255, 215, 0))
+        return debug
+
+    def _capture_and_check_anchor(self, pid):
         image, hwnd = capture_pid_window(pid)
         if image is None:
-            return None, hwnd, None
-        result = detect_inventory_grid(image)
-        return image, hwnd, result
+            return None, hwnd, None, None
+
+        # This is the only open/closed decision.
+        anchor = find_inventory_anchor(image)
+
+        # Grid debug is useful only after the real bag anchor is visible.
+        grid_result = None
+        if anchor is not None:
+            try:
+                grid_result = detect_inventory_grid(image)
+            except Exception as error:
+                print(f"Inventory grid check after anchor failed: {error}")
+
+        return image, hwnd, anchor, grid_result
 
     def _press_hotkey(self, hotkey):
         parts = [part.strip() for part in str(hotkey).replace("+", " ").split() if part.strip()]
@@ -137,6 +159,14 @@ class InventoryEnsureOpenModule:
                 except Exception:
                     pass
 
+    def _save_open_debug(self, image, anchor, grid_result, prefix, account_index, pid):
+        if grid_result is not None:
+            self._save_image(draw_grid_debug(image, grid_result), prefix, account_index, pid)
+        elif anchor is not None:
+            self._save_image(self._draw_anchor_debug(image, anchor, "ANCHOR FOUND"), prefix, account_index, pid)
+        else:
+            self._save_image(draw_failure_debug(image), prefix, account_index, pid)
+
     def run(self, account_index, session):
         if not self.enabled():
             return "SKIPPED"
@@ -146,24 +176,25 @@ class InventoryEnsureOpenModule:
         if not pid:
             return "INVENTORY_ENSURE_OPEN_NO_PID"
 
-        image, hwnd, result = self._capture_and_detect(pid)
+        image, hwnd, anchor, grid_result = self._capture_and_check_anchor(pid)
         if image is None:
             return "INVENTORY_ENSURE_OPEN_CAPTURE_FAILED"
 
-        if result is not None:
+        if anchor is not None:
             print(
-                "Inventory already open - "
+                "Inventory already open by image anchor - "
                 f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - "
-                f"name={page_name!r} - grid={result.box}"
+                f"name={page_name!r} - anchor={anchor.anchor_box} - "
+                f"grid={anchor.grid_box} - score={anchor.score:.3f}"
             )
             try:
-                self._save_image(draw_grid_debug(image, result), "already_open", account_index, pid)
+                self._save_open_debug(image, anchor, grid_result, "already_open", account_index, pid)
             except Exception as error:
                 print(f"Inventory open probe already-open debug save failed: {error}")
             return "OK"
 
         print(
-            "Inventory not detected - pressing hotkey - "
+            "Inventory anchor not detected - pressing hotkey - "
             f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - "
             f"name={page_name!r} - hotkey={self._hotkey()!r}"
         )
@@ -174,12 +205,18 @@ class InventoryEnsureOpenModule:
 
         last_image = image
         last_hwnd = hwnd
+        last_anchor = None
+        last_grid_result = None
         hotkey = self._hotkey()
         wait_seconds = self._wait_seconds()
 
         for attempt in range(1, self._attempts() + 1):
             try:
                 self._press_hotkey(hotkey)
+                print(
+                    "Inventory hotkey pressed - "
+                    f"account={account_index + 1} - attempt={attempt}/{self._attempts()} - hotkey={hotkey!r}"
+                )
             except Exception as error:
                 print(
                     "Inventory hotkey press failed - "
@@ -189,34 +226,35 @@ class InventoryEnsureOpenModule:
 
             time.sleep(wait_seconds)
 
-            last_image, last_hwnd, result = self._capture_and_detect(pid)
+            last_image, last_hwnd, last_anchor, last_grid_result = self._capture_and_check_anchor(pid)
             if last_image is None:
                 return "INVENTORY_ENSURE_OPEN_CAPTURE_FAILED"
 
-            if result is not None:
+            if last_anchor is not None:
                 print(
-                    "Inventory opened - "
+                    "Inventory opened by image anchor - "
                     f"account={account_index + 1} - pid={pid} - hwnd={last_hwnd} - "
-                    f"attempt={attempt} - grid={result.box}"
+                    f"attempt={attempt} - anchor={last_anchor.anchor_box} - "
+                    f"grid={last_anchor.grid_box} - score={last_anchor.score:.3f}"
                 )
                 try:
-                    self._save_image(draw_grid_debug(last_image, result), "opened", account_index, pid)
+                    self._save_open_debug(last_image, last_anchor, last_grid_result, "opened", account_index, pid)
                 except Exception as error:
                     print(f"Inventory open probe opened debug save failed: {error}")
                 return "OK"
 
             print(
-                "Inventory still not detected after hotkey - "
+                "Inventory anchor still not detected after hotkey - "
                 f"account={account_index + 1} - attempt={attempt}/{self._attempts()}"
             )
 
         try:
-            self._save_image(draw_failure_debug(last_image), "open_failed", account_index, pid)
+            self._save_open_debug(last_image, last_anchor, last_grid_result, "open_failed", account_index, pid)
         except Exception as error:
             print(f"Inventory open probe failed debug save failed: {error}")
 
         print(
-            "Inventory open failed - "
+            "Inventory open failed by image anchor - "
             f"account={account_index + 1} - pid={pid} - hwnd={last_hwnd} - "
             f"hotkey={hotkey!r}"
         )
