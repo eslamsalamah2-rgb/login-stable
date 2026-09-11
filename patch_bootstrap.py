@@ -55,8 +55,10 @@ import account_retry_limit_patch
 import inventory_grid_alignment_patch
 import final_stability_cleanup_patch
 
-# Final gates: manual Start launches real post-login work, Stop interrupts fast.
+# Final gates: manual Start launches real post-login work, Stop interrupts fast,
+# and unavailable accounts do not block the whole post-login cycle.
 import post_login_start_gate_fix_patch
 import immediate_stop_hotkey_patch
+import post_login_skip_unavailable_patch
 
 print("Patch bootstrap loaded: stable import order active")
