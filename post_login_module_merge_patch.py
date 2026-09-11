@@ -37,31 +37,32 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_open_strict": False,
     "inventory_open_probe_save_debug_image": True,
     "inventory_open_probe_debug_dir": "logs/inventory_open_probe",
-    "enable_inventory_grid_probe": True,
-    "inventory_grid_probe_save_debug_image": True,
+    "enable_inventory_grid_probe": False,
+    "inventory_grid_probe_save_debug_image": False,
     "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
-    "enable_inventory_item_probe": True,
+    "enable_inventory_item_probe": False,
     "inventory_item_templates_dir": "assets/drop_items",
     "inventory_item_match_threshold": 0.72,
-    "inventory_item_probe_save_debug_image": True,
+    "inventory_item_probe_save_debug_image": False,
     "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
     "enable_inventory_drop_worker": True,
     "inventory_drop_templates_dir": "assets/drop_items",
-    "inventory_drop_match_threshold": 0.78,
+    "inventory_drop_match_threshold": 0.88,
     "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
-    "inventory_drop_click_delay": 0.12,
+    "inventory_drop_click_delay": 0.04,
+    "inventory_drop_after_drop_delay": 0.05,
     "inventory_drop_target_mode": "top_right",
-    "inventory_drop_target_margin_x": 6,
-    "inventory_drop_target_margin_y": 6,
+    "inventory_drop_target_margin_x": 2,
+    "inventory_drop_target_margin_y": 2,
     "inventory_drop_target_x_fraction": 0.50,
     "inventory_drop_target_y_fraction": 0.45,
     "inventory_drop_confirm_yes_enabled": True,
     "inventory_drop_confirm_yes_threshold": 0.76,
-    "inventory_drop_confirm_yes_timeout": 3.0,
+    "inventory_drop_confirm_yes_timeout": 1.0,
     "inventory_drop_confirm_yes_strict": False,
     "inventory_drop_confirm_yes_paths": "",
-    "inventory_drop_save_debug_image": True,
+    "inventory_drop_save_debug_image": False,
     "inventory_drop_debug_dir": "logs/inventory_drop_worker",
 }
 
@@ -84,12 +85,13 @@ MERGE_SETTING_LABELS = {
     "inventory_item_match_threshold": "inventory_item_match_threshold | حساسية مطابقة صور العناصر",
     "inventory_item_probe_save_debug_image": "inventory_item_probe_save_debug_image | حفظ صورة Debug لمطابقة العناصر",
     "inventory_item_probe_debug_dir": "inventory_item_probe_debug_dir | مجلد صور Debug للعناصر",
-    "enable_inventory_drop_worker": "enable_inventory_drop_worker | Drop - رمي العناصر المطابقة",
+    "enable_inventory_drop_worker": "enable_inventory_drop_worker | Drop - رمي العناصر المطابقة فقط",
     "inventory_drop_templates_dir": "inventory_drop_templates_dir | مجلد صور عناصر الدروب",
     "inventory_drop_match_threshold": "inventory_drop_match_threshold | حساسية الدروب - أعلى أمانًا",
-    "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | عدد العناصر المرميّة قبل الانتقال للحساب التالي",
+    "inventory_drop_max_items_per_account": "inventory_drop_max_items_per_account | أقصى عدد عناصر مطابقة يتم رميها قبل الحساب التالي",
     "inventory_drop_clicks_per_point": "inventory_drop_clicks_per_point | عدد الضغطات على الخانة ومكان الرمي",
     "inventory_drop_click_delay": "inventory_drop_click_delay | التأخير بين ضغطات الدروب/ثانية",
+    "inventory_drop_after_drop_delay": "inventory_drop_after_drop_delay | انتظار بسيط بعد كل رمية قبل إعادة السكان",
     "inventory_drop_target_mode": "inventory_drop_target_mode | وضع مكان الرمي: top_right أو fraction",
     "inventory_drop_target_margin_x": "inventory_drop_target_margin_x | هامش الرمي من يمين النافذة بالبكسل",
     "inventory_drop_target_margin_y": "inventory_drop_target_margin_y | هامش الرمي من أعلى النافذة بالبكسل",
@@ -105,46 +107,15 @@ MERGE_SETTING_LABELS = {
 }
 
 
-DROP_TEST_PRESET = {
-    "enable_post_login_commands": True,
-    "post_login_debug_only": False,
-    "enable_inventory_probe": False,
-    "enable_inventory_ensure_open": True,
-    "inventory_open_hotkey": "i",
-    "inventory_open_attempts": 2,
-    "inventory_open_wait_seconds": 0.80,
-    "inventory_open_strict": False,
-    "inventory_open_probe_save_debug_image": True,
-    "inventory_open_probe_debug_dir": "logs/inventory_open_probe",
-    "enable_inventory_grid_probe": True,
-    "inventory_grid_probe_save_debug_image": True,
-    "inventory_grid_probe_debug_dir": "logs/inventory_grid_probe",
-    "enable_inventory_item_probe": True,
-    "inventory_item_templates_dir": "assets/drop_items",
-    "inventory_item_match_threshold": 0.72,
-    "inventory_item_probe_save_debug_image": True,
-    "inventory_item_probe_debug_dir": "logs/inventory_item_probe",
-    "enable_inventory_drop_worker": True,
-    "inventory_drop_templates_dir": "assets/drop_items",
-    "inventory_drop_match_threshold": 0.78,
-    "inventory_drop_max_items_per_account": 40,
-    "inventory_drop_clicks_per_point": 2,
-    "inventory_drop_click_delay": 0.12,
-    "inventory_drop_target_mode": "top_right",
-    "inventory_drop_target_margin_x": 6,
-    "inventory_drop_target_margin_y": 6,
-    "inventory_drop_target_x_fraction": 0.50,
-    "inventory_drop_target_y_fraction": 0.45,
-    "inventory_drop_confirm_yes_enabled": True,
-    "inventory_drop_confirm_yes_threshold": 0.76,
-    "inventory_drop_confirm_yes_timeout": 3.0,
-    "inventory_drop_confirm_yes_strict": False,
-    "inventory_drop_confirm_yes_paths": "",
-    "inventory_drop_save_debug_image": True,
-    "inventory_drop_debug_dir": "logs/inventory_drop_worker",
-    "post_login_account_delay_seconds": 2.0,
-    "post_login_round_delay_seconds": 5.0,
-}
+DROP_TEST_PRESET = dict(MERGE_SETTING_DEFAULTS)
+DROP_TEST_PRESET.update(
+    {
+        "enable_post_login_commands": True,
+        "post_login_debug_only": False,
+        "post_login_account_delay_seconds": 0.50,
+        "post_login_round_delay_seconds": 1.0,
+    }
+)
 
 
 def _install_merge_settings():
@@ -158,21 +129,21 @@ def _install_merge_settings():
 
 
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
-    """Prepare the program for the current full-bag drop test.
+    """Prepare the program for the current rescan-drop test.
 
-    This is intentionally temporary for the merge test stage. It forces the
-    inventory-open + grid + item-probe + full visible-bag drop settings even if
-    settings.json still contains older values from another machine.
+    Drop execution now rescans the bag after every item. The separate visual
+    GridProbe and ItemProbe modules are disabled in this preset to keep the real
+    drop pass fast; the DropWorker does its own grid and item scan internally.
     """
     try:
         self.runtime_settings.update(DROP_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Full-Bag Drop test preset applied - "
+            "Inventory Rescan-Drop preset applied - "
             f"reason={reason} - values={DROP_TEST_PRESET}"
         )
-        self.set_status("اختبار Drop جاهز: يفضي كل العناصر المطابقة قبل الحساب التالي")
+        self.set_status("Drop جاهز: سكان ثم رمي عنصر مطابق ثم سكان تاني")
     except Exception as error:
         print(f"Inventory Drop preset failed: {error}")
         self.set_status("فشل تجهيز اختبار Drop")
@@ -187,7 +158,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_full_bag_drop_test_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_rescan_drop_button"))
     except Exception as error:
         print(f"Could not start Inventory Drop test: {error}")
 
@@ -195,7 +166,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="full_bag_drop_test_button",
+        reason="rescan_drop_button",
         start_runner=True,
     )
 
@@ -205,7 +176,7 @@ def _add_inventory_probe_test_button(self):
         controls = self.resume_button.master
         self.inventory_probe_test_button = ctk.CTkButton(
             controls,
-            text="Drop All",
+            text="Drop Scan",
             width=115,
             height=40,
             fg_color="#6b4f00",
@@ -221,8 +192,6 @@ def _selection_init_with_probe_button(self):
     _ORIGINAL_SELECTION_INIT(self)
     _add_inventory_probe_test_button(self)
 
-    # Force the current test settings on startup so the user does not need to
-    # edit Settings or settings.json manually.
     try:
         self.app.after(
             200,
