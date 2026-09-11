@@ -5,6 +5,7 @@ import existing_pages_settings_patch  # adds Scan Open, side panel, and editable
 import pre_merge_safety_patch  # logging, backups, input lock, feature flags, rollback prep
 import post_login_commands_patch  # starts safe post-login command loop after READY accounts
 import post_login_module_merge_patch  # safe modular worker hook for future Drop/Use/Sash merge
+import inventory_grid_alignment_patch  # shifts detected inventory grid slightly left after user test
 from selection_launcher import SelectionAwareLauncher
 
 
