@@ -16,6 +16,7 @@ import post_sash_final_actions_patch
 import item_selection_patch
 import compact_item_selector_ui_patch
 import ui_controls_settings_patch
+import settings_onoff_close_patch
 import input_speed_patch
 import login_stability_patch
 import invalid_account_id_wait_patch
