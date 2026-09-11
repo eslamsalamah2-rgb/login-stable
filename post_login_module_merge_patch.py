@@ -1,7 +1,7 @@
 """Safe modular merge layer for post-login workers.
 
 This patch does not merge the old google2 app. It only adds a small module
-runner hook so each future task can be added as an isolated worker.
+runner hook so each post-login task remains an isolated worker under Login.
 """
 
 import customtkinter as ctk
@@ -28,14 +28,14 @@ _ORIGINAL_RUN_ACCOUNT_COMMANDS = PostLoginCommandRunner._run_account_commands
 
 MERGE_SETTING_DEFAULTS = {
     "enable_inventory_probe": False,
-    "inventory_probe_save_debug_image": True,
+    "inventory_probe_save_debug_image": False,
     "inventory_probe_debug_dir": "logs/inventory_probe",
     "enable_inventory_ensure_open": True,
     "inventory_open_hotkey": "i",
     "inventory_open_attempts": 2,
-    "inventory_open_wait_seconds": 0.80,
+    "inventory_open_wait_seconds": 0.50,
     "inventory_open_strict": False,
-    "inventory_open_probe_save_debug_image": True,
+    "inventory_open_probe_save_debug_image": False,
     "inventory_open_probe_debug_dir": "logs/inventory_open_probe",
     "enable_inventory_grid_probe": False,
     "inventory_grid_probe_save_debug_image": False,
@@ -50,16 +50,16 @@ MERGE_SETTING_DEFAULTS = {
     "inventory_drop_match_threshold": 0.88,
     "inventory_drop_max_items_per_account": 40,
     "inventory_drop_clicks_per_point": 2,
-    "inventory_drop_click_delay": 0.04,
-    "inventory_drop_after_drop_delay": 0.05,
+    "inventory_drop_click_delay": 0.02,
+    "inventory_drop_after_drop_delay": 0.02,
     "inventory_drop_target_mode": "top_right",
-    "inventory_drop_target_margin_x": 2,
-    "inventory_drop_target_margin_y": 2,
+    "inventory_drop_target_margin_x": 1,
+    "inventory_drop_target_margin_y": 1,
     "inventory_drop_target_x_fraction": 0.50,
     "inventory_drop_target_y_fraction": 0.45,
     "inventory_drop_confirm_yes_enabled": True,
     "inventory_drop_confirm_yes_threshold": 0.76,
-    "inventory_drop_confirm_yes_timeout": 1.0,
+    "inventory_drop_confirm_yes_timeout": 0.80,
     "inventory_drop_confirm_yes_strict": False,
     "inventory_drop_confirm_yes_paths": "",
     "inventory_drop_save_debug_image": False,
@@ -112,8 +112,8 @@ DROP_TEST_PRESET.update(
     {
         "enable_post_login_commands": True,
         "post_login_debug_only": False,
-        "post_login_account_delay_seconds": 0.50,
-        "post_login_round_delay_seconds": 1.0,
+        "post_login_account_delay_seconds": 0.25,
+        "post_login_round_delay_seconds": 0.50,
     }
 )
 
@@ -129,21 +129,20 @@ def _install_merge_settings():
 
 
 def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
-    """Prepare the program for the current rescan-drop test.
+    """Prepare the program for the current fast rescan-drop test.
 
-    Drop execution now rescans the bag after every item. The separate visual
-    GridProbe and ItemProbe modules are disabled in this preset to keep the real
-    drop pass fast; the DropWorker does its own grid and item scan internally.
+    Drop execution rescans after every item, but visual debug probes are disabled
+    so it does not waste time saving images while dropping.
     """
     try:
         self.runtime_settings.update(DROP_TEST_PRESET)
         self.apply_runtime_settings()
         self.save_settings()
         print(
-            "Inventory Rescan-Drop preset applied - "
+            "Inventory Fast Rescan-Drop preset applied - "
             f"reason={reason} - values={DROP_TEST_PRESET}"
         )
-        self.set_status("Drop جاهز: سكان ثم رمي عنصر مطابق ثم سكان تاني")
+        self.set_status("Drop جاهز: يرمي عنصر مطابق ثم يعمل سكان سريع ويكرر")
     except Exception as error:
         print(f"Inventory Drop preset failed: {error}")
         self.set_status("فشل تجهيز اختبار Drop")
@@ -158,7 +157,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
         return
 
     try:
-        self.app.after(300, lambda: runner.start_if_ready("inventory_rescan_drop_button"))
+        self.app.after(300, lambda: runner.start_if_ready("inventory_fast_rescan_drop_button"))
     except Exception as error:
         print(f"Could not start Inventory Drop test: {error}")
 
@@ -166,7 +165,7 @@ def _apply_inventory_grid_settings(self, reason="startup", start_runner=False):
 def _apply_inventory_probe_test_preset(self):
     _apply_inventory_grid_settings(
         self,
-        reason="rescan_drop_button",
+        reason="fast_rescan_drop_button",
         start_runner=True,
     )
 
