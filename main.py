@@ -1,37 +1,4 @@
-import health_recovery_patch
-import startup_focus_patch
-import password_error_policy_patch
-import existing_pages_settings_patch
-import security_logger_update_patch
-import pre_merge_safety_patch
-import post_login_commands_patch
-import post_login_module_merge_patch
-import post_login_account_budget_patch
-import account_options_patch
-import drop_settings_patch
-import use_items_patch
-import sash_items_patch
-import sash_next_page_patch
-import post_sash_final_actions_patch
-import item_selection_patch
-import compact_item_selector_ui_patch
-import ui_controls_settings_patch
-import settings_onoff_close_patch
-import top_header_controls_patch
-import startup_scan_visible_patch
-import hide_bottom_start_stop_patch
-import restore_scan_panel_bottom_patch
-import language_toggle_patch
-import input_speed_patch
-import login_input_settings_patch
-import login_username_arrow_patch
-import settings_language_details_patch
-import remaining_labels_language_patch
-import language_buttons_fixed_english_patch
-import login_stability_patch
-import invalid_account_id_wait_patch
-import account_retry_limit_patch
-import inventory_grid_alignment_patch
+import patch_bootstrap  # keeps patch order stable and main.py clean
 from selection_launcher import SelectionAwareLauncher
 
 
