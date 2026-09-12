@@ -2,10 +2,13 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
+set "EXE_NAME=ZERO_LOGIN_BOT"
+
 echo ========================================
-echo Building ZERO_LOGIN_BOT.exe
-echo User image assets stay OUTSIDE the exe
-echo ========================================
+echo Building %EXE_NAME%.exe
+ echo Original program name restored: ZERO_LOGIN_BOT
+ echo User image assets stay OUTSIDE the exe
+ echo ========================================
 
 if not exist main.py (
     echo ERROR: main.py not found. Run this file from the project folder.
@@ -28,7 +31,7 @@ pyinstaller ^
     --clean ^
     --onefile ^
     --windowed ^
-    --name ZERO_LOGIN_BOT ^
+    --name %EXE_NAME% ^
     --collect-data customtkinter ^
     main.py
 
@@ -51,17 +54,21 @@ if exist item_selections.json copy /Y item_selections.json dist\item_selections.
 
 if exist accounts.json.example copy /Y accounts.json.example dist\accounts.json.example >nul
 
+if not exist dist\assets (
+    echo WARNING: dist\assets was not created. External image assets are missing.
+)
+
 echo.
 echo DONE.
 echo Exe path:
-echo dist\ZERO_LOGIN_BOT.exe
+echo dist\%EXE_NAME%.exe
 echo.
 echo Keep this structure:
-echo dist\ZERO_LOGIN_BOT.exe
+echo dist\%EXE_NAME%.exe
 echo dist\assets\...
 echo dist\accounts.json
-echo dist\settings.json
-echo dist\item_selections.json
-echo.
+ echo dist\settings.json
+ echo dist\item_selections.json
+ echo.
 echo IMPORTANT: Drop/Use/Sash images are external in dist\assets, not inside the exe.
 pause
