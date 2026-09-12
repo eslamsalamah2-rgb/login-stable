@@ -56,10 +56,12 @@ import inventory_grid_alignment_patch
 import final_stability_cleanup_patch
 
 # Final gates: manual Start launches real post-login work, Stop interrupts fast,
-# unavailable accounts do not block the cycle, and blank UI rows are ignored.
+# unavailable accounts do not block the cycle, blank UI rows are ignored, and
+# selected/pending slots with no real account data are cleared from queues.
 import post_login_start_gate_fix_patch
 import immediate_stop_hotkey_patch
 import post_login_skip_unavailable_patch
 import blank_account_cleanup_patch
+import post_login_no_account_clear_patch
 
 print("Patch bootstrap loaded: stable import order active")
