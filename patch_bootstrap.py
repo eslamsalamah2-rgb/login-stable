@@ -1,9 +1,13 @@
 """Central bootstrap for runtime patches.
 
 Keep the import order stable here so main.py stays small and future maintenance
-happens in one place.  This file does not add behavior by itself; it imports the
-same patch modules in the same order, then installs the final safety cleanup.
+happens in one place. This file imports the patch modules in a fixed order.
 """
+
+# Runtime path must be normalized before modules try to load external assets or
+# runtime JSON files. This is especially important for the frozen EXE launched
+# by double-click from Explorer.
+import runtime_path_patch
 
 # Core Login / recovery protection.
 import health_recovery_patch
@@ -19,6 +23,7 @@ import post_login_module_merge_patch
 import post_login_account_budget_patch
 import account_options_patch
 import drop_settings_patch
+import drop_pick_to_target_delay_patch
 import use_items_patch
 import sash_items_patch
 import sash_next_page_patch
@@ -56,8 +61,7 @@ import inventory_grid_alignment_patch
 import final_stability_cleanup_patch
 
 # Final gates: manual Start launches real post-login work, Stop interrupts fast,
-# unavailable accounts do not block the cycle, blank UI rows are ignored, and
-# selected/pending slots with no real account data are cleared from queues.
+# unavailable accounts do not block the cycle, and blank UI rows are ignored.
 import post_login_start_gate_fix_patch
 import immediate_stop_hotkey_patch
 import post_login_skip_unavailable_patch
