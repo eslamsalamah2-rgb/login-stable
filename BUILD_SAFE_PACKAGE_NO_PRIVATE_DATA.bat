@@ -3,7 +3,8 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ========================================
-echo Building SAFE ZERO BOT package
+echo Building SAFE ZERO_LOGIN_BOT package
+echo Original executable name: ZERO_LOGIN_BOT.exe
 echo No accounts.json / credentials.json / logs / backups will be copied.
 echo Images stay external next to the exe.
 echo ========================================
