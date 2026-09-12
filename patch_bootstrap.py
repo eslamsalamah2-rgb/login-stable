@@ -56,7 +56,7 @@ import login_stability_patch
 import invalid_account_id_wait_patch
 import account_retry_limit_patch
 
-# Geometry alignment and final maintenance guards.
+# Geometry alignment and maintenance guards.
 import inventory_grid_alignment_patch
 import final_stability_cleanup_patch
 
