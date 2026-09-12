@@ -68,7 +68,8 @@ import post_login_skip_unavailable_patch
 import blank_account_cleanup_patch
 import post_login_no_account_clear_patch
 
-# EXE-only diagnostics: hidden worker exceptions are logged and shown in status.
+# EXE diagnostics and final product naming.
 import exe_runtime_error_guard_patch
+import login_name_patch
 
 print("Patch bootstrap loaded: stable import order active")
