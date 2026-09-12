@@ -1,13 +1,7 @@
 """Clean Settings UI for Drop timing without cluttering Login settings.
 
-The normal Settings window used to show every runtime key, including image
-thresholds/detection accuracy values.  This patch replaces the Settings window
-with a small grouped editor:
-- Login settings: only stable startup/retry timings.
-- Setting Drop: only timing/speed values that the user may tune while testing.
-
-Detection thresholds stay in code/settings.json internally, but they are hidden
-from the UI to keep the file/window clean.
+Detection thresholds stay hidden from the UI; only operational timings/speeds
+that are useful while testing Drop are exposed here.
 """
 
 import customtkinter as ctk
@@ -33,6 +27,7 @@ SETTINGS_GROUPS = (
             ("post_login_account_budget_seconds", "مدة كل حساب في أوامر الدخول قبل الانتقال للتالي / ثانية"),
             ("inventory_open_wait_seconds", "انتظار بعد ضغط زر فتح الشنطة قبل التأكد"),
             ("inventory_drop_click_delay", "تأخير بين ضغطات الدروب داخل نفس النقطة"),
+            ("inventory_drop_pickup_to_drop_delay", "الوقت بين مسك الـItem وبين الضغط لرميه / ثانية"),
             ("inventory_drop_after_drop_delay", "انتظار بعد الرمية قبل البحث عن Yes / السكان التالي"),
             ("inventory_drop_confirm_yes_timeout", "أقصى وقت انتظار ظهور زر Yes بعد الرمية"),
             ("post_login_account_delay_seconds", "انتظار بعد انتهاء الحساب قبل الانتقال للحساب التالي"),
@@ -108,7 +103,7 @@ def _add_entry_row(body, label_text, value):
 def _open_clean_settings_window(self):
     window = ctk.CTkToplevel(self.app)
     window.title("Settings")
-    window.geometry("650x650")
+    window.geometry("650x680")
     window.transient(self.app)
     window.grab_set()
 
@@ -125,7 +120,7 @@ def _open_clean_settings_window(self):
         text_color="#cfcfcf",
     ).pack(pady=(0, 10))
 
-    body = ctk.CTkScrollableFrame(window, height=485)
+    body = ctk.CTkScrollableFrame(window, height=510)
     body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
 
     entries = {}
@@ -171,4 +166,4 @@ def _open_clean_settings_window(self):
 
 SelectionAwareLauncher.open_settings_window = _open_clean_settings_window
 
-print("Drop settings patch active: clean Settings window with Setting Drop timings only")
+print("Drop settings patch active: pickup-to-drop delay available, no Sash changes")
