@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "EXE_NAME=ZERO_LOGIN_BOT"
+set "EXE_NAME=Login"
 
 echo ========================================
 echo Building %EXE_NAME%.exe
- echo Original program name restored: ZERO_LOGIN_BOT
- echo User image assets stay OUTSIDE the exe
- echo ========================================
+echo Application name: Login
+echo User image assets stay OUTSIDE the exe
+echo ========================================
 
 if not exist main.py (
     echo ERROR: main.py not found. Run this file from the project folder.
@@ -51,7 +51,6 @@ if exist assets (
 if exist accounts.json copy /Y accounts.json dist\accounts.json >nul
 if exist settings.json copy /Y settings.json dist\settings.json >nul
 if exist item_selections.json copy /Y item_selections.json dist\item_selections.json >nul
-
 if exist accounts.json.example copy /Y accounts.json.example dist\accounts.json.example >nul
 
 if not exist dist\assets (
@@ -64,11 +63,11 @@ echo Exe path:
 echo dist\%EXE_NAME%.exe
 echo.
 echo Keep this structure:
-echo dist\%EXE_NAME%.exe
+echo dist\Login.exe
 echo dist\assets\...
 echo dist\accounts.json
- echo dist\settings.json
- echo dist\item_selections.json
- echo.
+echo dist\settings.json
+echo dist\item_selections.json
+echo.
 echo IMPORTANT: Drop/Use/Sash images are external in dist\assets, not inside the exe.
 pause
