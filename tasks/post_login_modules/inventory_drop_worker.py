@@ -58,12 +58,15 @@ class InventoryDropWorkerModule:
     Real drop rule:
       - use only templates from assets/drop_items
       - find one current matched item
-      - drop it and confirm Yes
+      - click the item once to pick it up
+      - wait the user-configured pickup->drop delay
+      - click the drop target once
+      - confirm Yes
       - capture/scan again before the next item
 
     Stop rule:
       - key 9 sets the runner stop event
-      - this worker checks it before/after scans and between mouse clicks
+      - this worker checks it before/after scans and between mouse actions
       - no Login/Health recovery should be triggered just because the user stops
     """
 
@@ -164,13 +167,21 @@ class InventoryDropWorkerModule:
         return self._int_setting("inventory_drop_max_items_per_account", 40, minimum=1, maximum=40)
 
     def _clicks_per_point(self):
-        return self._int_setting("inventory_drop_clicks_per_point", 2, minimum=1, maximum=3)
+        return self._int_setting("inventory_drop_clicks_per_point", 1, minimum=1, maximum=3)
 
     def _click_delay(self):
-        return self._float_setting("inventory_drop_click_delay", 0.01, minimum=0.0, maximum=1.0)
+        return self._float_setting("inventory_drop_click_delay", 0.10, minimum=0.0, maximum=1.0)
+
+    def _pickup_to_drop_delay(self):
+        return self._float_setting(
+            "inventory_drop_pickup_to_drop_delay",
+            0.15,
+            minimum=0.0,
+            maximum=5.0,
+        )
 
     def _after_drop_delay(self):
-        return self._float_setting("inventory_drop_after_drop_delay", 0.0, minimum=0.0, maximum=1.0)
+        return self._float_setting("inventory_drop_after_drop_delay", 0.15, minimum=0.0, maximum=1.0)
 
     def _target_mode(self):
         return str(self._setting("inventory_drop_target_mode", "top_right") or "top_right").strip().lower()
@@ -467,17 +478,25 @@ class InventoryDropWorkerModule:
         slot_x, slot_y = action.slot_screen
         target_x, target_y = action.target_screen
         clicks = self._clicks_per_point()
+        pickup_to_drop_delay = self._pickup_to_drop_delay()
 
         print(
             "Inventory drop executing - "
             f"slot={action.slot_index + 1} - item={action.item_name!r} - "
             f"score={action.score:.3f} - slot_xy={action.slot_screen} - "
-            f"target_xy={action.target_screen} - target_mode={self._target_mode()} - clicks={clicks}"
+            f"target_xy={action.target_screen} - target_mode={self._target_mode()} - clicks={clicks} - "
+            f"pickup_to_drop_delay={pickup_to_drop_delay:.3f}s"
         )
 
+        # 1) Pick item from inventory.
         if not self._click_point(slot_x, slot_y, clicks):
             return "STOP_REQUESTED"
 
+        # 2) Explicit user-controlled delay while the item is in the mouse cursor.
+        if pickup_to_drop_delay > 0 and not self._sleep_interruptible(pickup_to_drop_delay):
+            return "STOP_REQUESTED"
+
+        # 3) Drop item at the configured target.
         if not self._click_point(target_x, target_y, clicks):
             return "STOP_REQUESTED"
 
@@ -519,132 +538,3 @@ class InventoryDropWorkerModule:
             target_screen=self._drop_target_screen(hwnd),
         )
         return image, hwnd, grid, item_result, action, "OK"
-
-    def run(self, account_index, session):
-        if not self.enabled():
-            return "SKIPPED"
-
-        if self._stop_requested():
-            return "STOP_REQUESTED"
-
-        pid = session.get("pid")
-        page_name = session.get("page_name", "")
-        if not pid:
-            return "INVENTORY_DROP_NO_PID"
-
-        templates_dir = self._templates_dir()
-        templates = load_item_templates(templates_dir)
-        if not templates:
-            print("Inventory drop skipped - no drop templates - " f"folder={templates_dir!r}")
-            return "OK"
-
-        prepared_templates = self._prepare_templates(templates)
-        if self._stop_requested():
-            return "STOP_REQUESTED"
-        if not prepared_templates:
-            print("Inventory drop skipped - no usable prepared templates")
-            return "OK"
-
-        image, hwnd = capture_pid_window(pid)
-        if image is None or not hwnd:
-            return "INVENTORY_DROP_CAPTURE_FAILED"
-
-        grid = detect_inventory_grid(image)
-        if grid is None:
-            print(
-                "Inventory drop skipped - bag/grid not detected before rescan - "
-                f"account={account_index + 1} - pid={pid} - hwnd={hwnd} - name={page_name!r}"
-            )
-            try:
-                self._save_image(draw_failure_debug(image), "grid_not_found", account_index, pid)
-            except Exception as error:
-                print(f"Inventory drop failure image save failed: {error}")
-            return "OK"
-
-        max_items = self._max_items()
-        threshold = self._threshold()
-        print(
-            "Inventory fast rescan-drop pass started - "
-            f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"templates={len(prepared_templates)} - max_items={max_items} - threshold={threshold:.2f}"
-        )
-
-        dropped = 0
-        last_scanned_slots = 0
-
-        while dropped < max_items:
-            if self._stop_requested():
-                print(
-                    "Inventory drop stopped by user - "
-                    f"account={account_index + 1} - dropped={dropped}"
-                )
-                return "STOP_REQUESTED"
-
-            image, hwnd, grid, item_result, action, scan_status = self._scan_next_drop(
-                pid=pid,
-                hwnd=hwnd,
-                grid=grid,
-                prepared_templates=prepared_templates,
-            )
-
-            if scan_status == "STOP_REQUESTED":
-                print(
-                    "Inventory drop stopped by user during scan - "
-                    f"account={account_index + 1} - dropped={dropped}"
-                )
-                return "STOP_REQUESTED"
-
-            if scan_status == "CAPTURE_FAILED" or image is None or not hwnd:
-                return "INVENTORY_DROP_CAPTURE_FAILED"
-
-            last_scanned_slots = getattr(item_result, "scanned_slots", 0) if item_result is not None else 0
-
-            if action is None:
-                print(
-                    "Inventory drop complete - no matched target items remain - "
-                    f"account={account_index + 1} - dropped={dropped} - scanned_slots={last_scanned_slots}"
-                )
-                break
-
-            print(
-                "Inventory drop rescan - "
-                f"account={account_index + 1} - scanned_slots={last_scanned_slots} - "
-                f"next_slot={action.slot_index + 1} - next_item={action.item_name!r} - score={action.score:.3f}"
-            )
-
-            try:
-                self._save_image(
-                    self._draw_drop_debug(image, grid, item_result, action),
-                    f"before_drop_{dropped + 1:02d}",
-                    account_index,
-                    pid,
-                )
-            except Exception as error:
-                print(f"Inventory drop before-drop debug save failed: {error}")
-
-            execute_result = self._execute_drop(action, pid, hwnd, grid)
-            if execute_result == "STOP_REQUESTED":
-                print(
-                    "Inventory drop stopped by user during click/confirm - "
-                    f"account={account_index + 1} - dropped={dropped}"
-                )
-                return "STOP_REQUESTED"
-            if execute_result == "CONFIRM_FAILED":
-                return "INVENTORY_DROP_CONFIRM_YES_FAILED"
-
-            dropped += 1
-
-        try:
-            if self._save_debug_enabled():
-                after_image, _ = self._capture_current_window(pid, hwnd)
-                if after_image is not None:
-                    self._save_image(after_image, "after_drop_rescan", account_index, pid)
-        except Exception as error:
-            print(f"Inventory drop after-drop image save failed: {error}")
-
-        print(
-            "Inventory drop worker OK - "
-            f"account={account_index + 1} - pid={pid} - name={page_name!r} - "
-            f"dropped={dropped} - last_scanned_slots={last_scanned_slots} - threshold={threshold:.2f}"
-        )
-        return "OK"
